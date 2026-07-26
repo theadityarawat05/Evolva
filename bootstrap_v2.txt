@@ -1,0 +1,1467 @@
+=== FILE: frontend/src/app/App.tsx ===
+
+import React, { useEffect } from "react";
+import { NavigationContainer } from "@react-navigation/native";
+import { StatusBar } from "expo-status-bar";
+
+import RootNavigator from "./navigation/RootNavigator";
+import { initializeDatabase } from "../database/sqlite";
+
+export default function App() {
+useEffect(() => {
+initializeDatabase();
+}, []);
+
+return (
+<NavigationContainer>
+<StatusBar style="light" />
+<RootNavigator />
+</NavigationContainer>
+);
+}
+
+=== FILE: frontend/src/constants/theme.ts ===
+
+export const COLORS = {
+background: "#0B0F14",
+
+surface: "#121821",
+
+surfaceLight: "#1A2330",
+
+primary: "#4F8CFF",
+
+primarySoft: "#1E3A66",
+
+text: "#FFFFFF",
+
+textSecondary: "#A6B0BF",
+
+success: "#2ECC71",
+
+warning: "#F39C12",
+
+danger: "#E74C3C",
+
+border: "#223044",
+};
+
+export const SPACING = {
+xs: 4,
+sm: 8,
+md: 16,
+lg: 24,
+xl: 32,
+};
+
+export const RADIUS = {
+sm: 8,
+md: 14,
+lg: 20,
+};
+
+=== FILE: frontend/src/constants/app.ts ===
+
+export const APP_NAME = "Evolva";
+
+export const APP_TAGLINE =
+"Personal Growth Operating System";
+
+export const APP_VERSION = "0.2.0";
+
+=== FILE: frontend/src/database/sqlite.ts ===
+
+import * as SQLite from "expo-sqlite";
+
+export const db =
+SQLite.openDatabaseSync("evolva.db");
+
+export function initializeDatabase() {
+db.execSync("CREATE TABLE IF NOT EXISTS messages ( id TEXT PRIMARY KEY NOT NULL, content TEXT NOT NULL, role TEXT NOT NULL, createdAt INTEGER NOT NULL );");
+
+db.execSync("CREATE TABLE IF NOT EXISTS memories ( id TEXT PRIMARY KEY NOT NULL, content TEXT NOT NULL, category TEXT NOT NULL, createdAt INTEGER NOT NULL );");
+
+db.execSync("CREATE TABLE IF NOT EXISTS journal_entries ( id TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL, createdAt INTEGER NOT NULL );");
+
+db.execSync("CREATE TABLE IF NOT EXISTS goals ( id TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL, completed INTEGER NOT NULL, createdAt INTEGER NOT NULL );");
+}
+
+=== FILE: frontend/src/types/message.ts ===
+
+export interface Message {
+id: string;
+
+role: "user" | "assistant";
+
+content: string;
+
+createdAt: number;
+}
+
+=== FILE: frontend/src/types/memory.ts ===
+
+export interface Memory {
+id: string;
+
+content: string;
+
+category: string;
+
+createdAt: number;
+}
+
+=== FILE: frontend/src/types/journal.ts ===
+
+export interface JournalEntry {
+id: string;
+
+title: string;
+
+content: string;
+
+createdAt: number;
+}
+
+=== FILE: frontend/src/types/goal.ts ===
+
+export interface Goal {
+id: string;
+
+title: string;
+
+completed: boolean;
+
+createdAt: number;
+}
+
+=== FILE: frontend/src/types/identity.ts ===
+
+export interface IdentityProfile {
+id: string;
+
+name: string;
+
+mission: string;
+
+values: string[];
+
+interests: string[];
+
+strengths: string[];
+
+weaknesses: string[];
+
+createdAt: number;
+
+updatedAt: number;
+}
+
+=== FILE: frontend/src/services/ai/AIProvider.ts ===
+
+export interface AIProvider {
+sendMessage(
+message: string
+): Promise<string>;
+}
+
+=== FILE: frontend/src/services/ai/MockProvider.ts ===
+
+import { AIProvider } from "./AIProvider";
+
+export class MockProvider
+implements AIProvider {
+
+async sendMessage(
+message: string
+): Promise<string> {
+
+return `Evolva received: ${message}`;
+
+}
+}
+
+=== FILE: frontend/src/services/ai/LocalProvider.ts ===
+
+import { AIProvider } from "./AIProvider";
+
+export class LocalProvider
+implements AIProvider {
+
+async sendMessage(
+message: string
+): Promise<string> {
+
+return "Local model not connected yet.";
+
+}
+}
+
+=== FILE: frontend/src/services/memory/MemoryExtractor.ts ===
+
+export function extractMemory(
+text: string
+) {
+return {
+content: text,
+category: "general",
+};
+}
+
+=== FILE: frontend/src/navigation/RootNavigator.tsx ===
+
+import React from "react";
+import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+
+import HomeScreen from "../screens/home/HomeScreen";
+import ChatScreen from "../screens/chat/ChatScreen";
+import MemoryScreen from "../screens/memory/MemoryScreen";
+import JournalScreen from "../screens/journal/JournalScreen";
+import MoreScreen from "../screens/settings/MoreScreen";
+
+import { COLORS } from "../constants/theme";
+
+const Tab = createBottomTabNavigator();
+
+export default function RootNavigator() {
+return (
+<Tab.Navigator
+screenOptions={{
+headerShown: false,
+
+    tabBarStyle: {
+      backgroundColor: COLORS.surface,
+      borderTopColor: COLORS.border,
+      height: 70,
+    },
+
+    tabBarActiveTintColor:
+      COLORS.primary,
+
+    tabBarInactiveTintColor:
+      COLORS.textSecondary,
+  }}
+>
+  <Tab.Screen
+    name="Home"
+    component={HomeScreen}
+  />
+
+  <Tab.Screen
+    name="Chat"
+    component={ChatScreen}
+  />
+
+  <Tab.Screen
+    name="Memory"
+    component={MemoryScreen}
+  />
+
+  <Tab.Screen
+    name="Journal"
+    component={JournalScreen}
+  />
+
+  <Tab.Screen
+    name="More"
+    component={MoreScreen}
+  />
+</Tab.Navigator>
+
+);
+}
+
+=== FILE: frontend/src/screens/home/HomeScreen.tsx ===
+
+import React from "react";
+
+import {
+ScrollView,
+View,
+Text,
+StyleSheet,
+} from "react-native";
+
+import {
+COLORS,
+SPACING,
+} from "../../constants/theme";
+
+export default function HomeScreen() {
+return (
+<ScrollView
+style={styles.container}
+>
+<View style={styles.header}>
+<Text style={styles.title}>
+Evolva
+</Text>
+
+    <Text style={styles.subtitle}>
+      Personal Growth Operating System
+    </Text>
+  </View>
+
+  <View style={styles.card}>
+    <Text style={styles.cardTitle}>
+      Today's Focus
+    </Text>
+
+    <Text style={styles.cardText}>
+      Continue Building Evolva
+    </Text>
+  </View>
+
+  <View style={styles.card}>
+    <Text style={styles.cardTitle}>
+      Active Goals
+    </Text>
+
+    <Text style={styles.cardText}>
+      No goals created yet
+    </Text>
+  </View>
+
+  <View style={styles.card}>
+    <Text style={styles.cardTitle}>
+      Memory Status
+    </Text>
+
+    <Text style={styles.cardText}>
+      Memory system ready
+    </Text>
+  </View>
+
+  <View style={styles.card}>
+    <Text style={styles.cardTitle}>
+      AI Status
+    </Text>
+
+    <Text style={styles.cardText}>
+      Local AI integration pending
+    </Text>
+  </View>
+</ScrollView>
+
+);
+}
+
+const styles = StyleSheet.create({
+container: {
+flex: 1,
+backgroundColor:
+COLORS.background,
+padding: SPACING.lg,
+},
+
+header: {
+marginTop: 40,
+marginBottom: 20,
+},
+
+title: {
+color: COLORS.text,
+fontSize: 36,
+fontWeight: "800",
+},
+
+subtitle: {
+color: COLORS.textSecondary,
+marginTop: 8,
+},
+
+card: {
+backgroundColor:
+COLORS.surface,
+
+padding: 18,
+
+borderRadius: 16,
+
+marginBottom: 16,
+
+},
+
+cardTitle: {
+color: COLORS.text,
+fontSize: 18,
+fontWeight: "700",
+marginBottom: 8,
+},
+
+cardText: {
+color:
+COLORS.textSecondary,
+},
+});
+
+=== FILE: frontend/src/screens/chat/ChatScreen.tsx ===
+
+import React, {
+useState,
+} from "react";
+
+import {
+View,
+Text,
+FlatList,
+TextInput,
+TouchableOpacity,
+StyleSheet,
+} from "react-native";
+
+import {
+COLORS,
+} from "../../constants/theme";
+
+export default function ChatScreen() {
+const [messages, setMessages] =
+useState<any[]>([]);
+
+const [input, setInput] =
+useState("");
+
+function handleSend() {
+if (!input.trim()) return;
+
+const userMessage = {
+  id: Date.now().toString(),
+  role: "user",
+  content: input,
+};
+
+setMessages((prev) => [
+  ...prev,
+  userMessage,
+]);
+
+setInput("");
+
+}
+
+return (
+<View style={styles.container}>
+<FlatList
+data={messages}
+keyExtractor={(item) =>
+item.id
+}
+renderItem={({ item }) => (
+<View style={styles.message}>
+<Text
+style={styles.messageText}
+>
+{item.content}
+</Text>
+</View>
+)}
+/>
+
+  <View style={styles.inputRow}>
+    <TextInput
+      value={input}
+      onChangeText={setInput}
+      placeholder="Message Evolva..."
+      placeholderTextColor="#777"
+      style={styles.input}
+    />
+
+    <TouchableOpacity
+      style={styles.button}
+      onPress={handleSend}
+    >
+      <Text
+        style={styles.buttonText}
+      >
+        Send
+      </Text>
+    </TouchableOpacity>
+  </View>
+</View>
+
+);
+}
+
+const styles =
+StyleSheet.create({
+container: {
+flex: 1,
+backgroundColor:
+COLORS.background,
+},
+
+message: {
+  backgroundColor:
+    COLORS.surface,
+
+  margin: 10,
+
+  padding: 12,
+
+  borderRadius: 12,
+},
+
+messageText: {
+  color: COLORS.text,
+},
+
+inputRow: {
+  flexDirection: "row",
+  padding: 12,
+},
+
+input: {
+  flex: 1,
+
+  backgroundColor:
+    COLORS.surface,
+
+  color: COLORS.text,
+
+  borderRadius: 12,
+
+  paddingHorizontal: 12,
+},
+
+button: {
+  marginLeft: 10,
+
+  backgroundColor:
+    COLORS.primary,
+
+  paddingHorizontal: 18,
+
+  justifyContent: "center",
+
+  borderRadius: 12,
+},
+
+buttonText: {
+  color: "#fff",
+  fontWeight: "700",
+},
+
+});
+
+=== FILE: frontend/src/screens/memory/MemoryScreen.tsx ===
+
+import React from "react";
+
+import {
+View,
+Text,
+StyleSheet,
+} from "react-native";
+
+import {
+COLORS,
+} from "../../constants/theme";
+
+export default function MemoryScreen() {
+return (
+<View style={styles.container}>
+<Text style={styles.title}>
+Memory Explorer
+</Text>
+
+  <Text style={styles.subtitle}>
+    Memory storage ready
+  </Text>
+</View>
+
+);
+}
+
+const styles =
+StyleSheet.create({
+container: {
+flex: 1,
+backgroundColor:
+COLORS.background,
+
+  justifyContent:
+    "center",
+
+  alignItems:
+    "center",
+},
+
+title: {
+  color: COLORS.text,
+  fontSize: 28,
+  fontWeight: "700",
+},
+
+subtitle: {
+  color:
+    COLORS.textSecondary,
+
+  marginTop: 10,
+},
+
+});
+
+=== FILE: frontend/src/screens/journal/JournalScreen.tsx ===
+
+import React from "react";
+
+import {
+View,
+Text,
+StyleSheet,
+} from "react-native";
+
+import {
+COLORS,
+} from "../../constants/theme";
+
+export default function JournalScreen() {
+return (
+<View style={styles.container}>
+<Text style={styles.title}>
+Journal
+</Text>
+
+  <Text style={styles.subtitle}>
+    Record thoughts, ideas and reflections.
+  </Text>
+</View>
+
+);
+}
+
+const styles = StyleSheet.create({
+container: {
+flex: 1,
+backgroundColor: COLORS.background,
+justifyContent: "center",
+alignItems: "center",
+},
+
+title: {
+color: COLORS.text,
+fontSize: 28,
+fontWeight: "700",
+},
+
+subtitle: {
+color: COLORS.textSecondary,
+marginTop: 10,
+},
+});
+
+=== FILE: frontend/src/screens/projects/ProjectsScreen.tsx ===
+
+import React from "react";
+
+import {
+View,
+Text,
+StyleSheet,
+} from "react-native";
+
+import {
+COLORS,
+} from "../../constants/theme";
+
+export default function ProjectsScreen() {
+return (
+<View style={styles.container}>
+<Text style={styles.title}>
+Projects
+</Text>
+
+  <Text style={styles.subtitle}>
+    Manage all active projects.
+  </Text>
+</View>
+
+);
+}
+
+const styles = StyleSheet.create({
+container: {
+flex: 1,
+backgroundColor: COLORS.background,
+justifyContent: "center",
+alignItems: "center",
+},
+
+title: {
+color: COLORS.text,
+fontSize: 28,
+fontWeight: "700",
+},
+
+subtitle: {
+color: COLORS.textSecondary,
+marginTop: 10,
+},
+});
+
+=== FILE: frontend/src/screens/goals/GoalsScreen.tsx ===
+
+import React from "react";
+
+import {
+View,
+Text,
+StyleSheet,
+} from "react-native";
+
+import {
+COLORS,
+} from "../../constants/theme";
+
+export default function GoalsScreen() {
+return (
+<View style={styles.container}>
+<Text style={styles.title}>
+Goals
+</Text>
+
+  <Text style={styles.subtitle}>
+    Track personal growth goals.
+  </Text>
+</View>
+
+);
+}
+
+const styles = StyleSheet.create({
+container: {
+flex: 1,
+backgroundColor: COLORS.background,
+justifyContent: "center",
+alignItems: "center",
+},
+
+title: {
+color: COLORS.text,
+fontSize: 28,
+fontWeight: "700",
+},
+
+subtitle: {
+color: COLORS.textSecondary,
+marginTop: 10,
+},
+});
+
+=== FILE: frontend/src/screens/timeline/TimelineScreen.tsx ===
+
+import React from "react";
+
+import {
+View,
+Text,
+StyleSheet,
+} from "react-native";
+
+import {
+COLORS,
+} from "../../constants/theme";
+
+export default function TimelineScreen() {
+return (
+<View style={styles.container}>
+<Text style={styles.title}>
+Timeline
+</Text>
+
+  <Text style={styles.subtitle}>
+    Important events and milestones.
+  </Text>
+</View>
+
+);
+}
+
+const styles = StyleSheet.create({
+container: {
+flex: 1,
+backgroundColor: COLORS.background,
+justifyContent: "center",
+alignItems: "center",
+},
+
+title: {
+color: COLORS.text,
+fontSize: 28,
+fontWeight: "700",
+},
+
+subtitle: {
+color: COLORS.textSecondary,
+marginTop: 10,
+},
+});
+
+=== FILE: frontend/src/screens/insights/InsightsScreen.tsx ===
+
+import React from "react";
+
+import {
+View,
+Text,
+StyleSheet,
+ScrollView,
+} from "react-native";
+
+import {
+COLORS,
+} from "../../constants/theme";
+
+export default function InsightsScreen() {
+return (
+<ScrollView style={styles.container}>
+<Text style={styles.title}>
+Insights
+</Text>
+
+  <View style={styles.card}>
+    <Text style={styles.cardTitle}>
+      Growth Patterns
+    </Text>
+
+    <Text style={styles.cardText}>
+      No insights generated yet.
+    </Text>
+  </View>
+
+  <View style={styles.card}>
+    <Text style={styles.cardTitle}>
+      Habits
+    </Text>
+
+    <Text style={styles.cardText}>
+      Waiting for activity data.
+    </Text>
+  </View>
+</ScrollView>
+
+);
+}
+
+const styles = StyleSheet.create({
+container: {
+flex: 1,
+backgroundColor: COLORS.background,
+padding: 16,
+},
+
+title: {
+color: COLORS.text,
+fontSize: 32,
+fontWeight: "800",
+marginBottom: 20,
+},
+
+card: {
+backgroundColor: COLORS.surface,
+padding: 16,
+borderRadius: 16,
+marginBottom: 16,
+},
+
+cardTitle: {
+color: COLORS.text,
+fontSize: 18,
+fontWeight: "700",
+marginBottom: 8,
+},
+
+cardText: {
+color: COLORS.textSecondary,
+},
+});
+
+=== FILE: frontend/src/screens/settings/MoreScreen.tsx ===
+
+import React from "react";
+
+import {
+ScrollView,
+Text,
+TouchableOpacity,
+StyleSheet,
+} from "react-native";
+
+import {
+COLORS,
+} from "../../constants/theme";
+
+const items = [
+"Memory",
+"Goals",
+"Timeline",
+"Insights",
+"Identity",
+"Settings",
+];
+
+export default function MoreScreen() {
+return (
+<ScrollView style={styles.container}>
+<Text style={styles.header}>
+More
+</Text>
+
+  {items.map((item) => (
+    <TouchableOpacity
+      key={item}
+      style={styles.item}
+    >
+      <Text style={styles.itemText}>
+        {item}
+      </Text>
+    </TouchableOpacity>
+  ))}
+</ScrollView>
+
+);
+}
+
+const styles = StyleSheet.create({
+container: {
+flex: 1,
+backgroundColor: COLORS.background,
+padding: 20,
+},
+
+header: {
+color: COLORS.text,
+fontSize: 32,
+fontWeight: "800",
+marginBottom: 20,
+},
+
+item: {
+backgroundColor: COLORS.surface,
+padding: 18,
+borderRadius: 14,
+marginBottom: 14,
+},
+
+itemText: {
+color: COLORS.text,
+fontSize: 16,
+fontWeight: "600",
+},
+});
+
+=== FILE: frontend/src/database/messages.ts ===
+
+import { db } from "./sqlite";
+import { Message } from "../types/message";
+
+export function saveMessage(
+message: Message
+) {
+db.runSync(
+"INSERT INTO messages ( id, content, role, createdAt ) VALUES (?, ?, ?, ?)",
+[
+message.id,
+message.content,
+message.role,
+message.createdAt,
+]
+);
+}
+
+export function getMessages() {
+return db.getAllSync(
+"SELECT * FROM messages ORDER BY createdAt ASC"
+) as Message[];
+}
+
+=== FILE: frontend/src/database/memories.ts ===
+
+import { db } from "./sqlite";
+import { Memory } from "../types/memory";
+
+export function saveMemory(
+memory: Memory
+) {
+db.runSync(
+"INSERT INTO memories ( id, content, category, createdAt ) VALUES (?, ?, ?, ?)",
+[
+memory.id,
+memory.content,
+memory.category,
+memory.createdAt,
+]
+);
+}
+
+export function getMemories() {
+return db.getAllSync(
+"SELECT * FROM memories ORDER BY createdAt DESC"
+) as Memory[];
+}
+=== FILE: frontend/src/database/goals.ts ===
+
+import { db } from "./sqlite";
+import { Goal } from "../types/goal";
+
+export function saveGoal(
+goal: Goal
+) {
+db.runSync(
+"INSERT INTO goals ( id, title, completed, createdAt ) VALUES (?, ?, ?, ?)",
+[
+goal.id,
+goal.title,
+goal.completed ? 1 : 0,
+goal.createdAt,
+]
+);
+}
+
+export function getGoals() {
+return db.getAllSync(
+"SELECT * FROM goals ORDER BY createdAt DESC"
+) as Goal[];
+}
+
+=== FILE: frontend/src/database/journal.ts ===
+
+import { db } from "./sqlite";
+import { JournalEntry } from "../types/journal";
+
+export function saveJournalEntry(
+entry: JournalEntry
+) {
+db.runSync(
+"INSERT INTO journal_entries ( id, title, content, createdAt ) VALUES (?, ?, ?, ?)",
+[
+entry.id,
+entry.title,
+entry.content,
+entry.createdAt,
+]
+);
+}
+
+export function getJournalEntries() {
+return db.getAllSync(
+"SELECT * FROM journal_entries ORDER BY createdAt DESC"
+) as JournalEntry[];
+}
+
+=== FILE: frontend/src/hooks/useChat.ts ===
+
+import {
+useState,
+useEffect,
+} from "react";
+
+import { Message } from "../types/message";
+
+import {
+getMessages,
+saveMessage,
+} from "../database/messages";
+
+export function useChat() {
+const [messages, setMessages] =
+useState<Message[]>([]);
+
+useEffect(() => {
+loadMessages();
+}, []);
+
+function loadMessages() {
+setMessages(
+getMessages()
+);
+}
+
+function sendMessage(
+content: string
+) {
+const message: Message = {
+id: Date.now().toString(),
+role: "user",
+content,
+createdAt: Date.now(),
+};
+
+saveMessage(message);
+
+setMessages((prev) => [
+  ...prev,
+  message,
+]);
+
+}
+
+return {
+messages,
+sendMessage,
+loadMessages,
+};
+}
+
+=== FILE: frontend/src/hooks/useMemory.ts ===
+
+import {
+useState,
+useEffect,
+} from "react";
+
+import { Memory } from "../types/memory";
+
+import {
+getMemories,
+saveMemory,
+} from "../database/memories";
+
+export function useMemory() {
+const [memories, setMemories] =
+useState<Memory[]>([]);
+
+useEffect(() => {
+loadMemories();
+}, []);
+
+function loadMemories() {
+setMemories(
+getMemories()
+);
+}
+
+function addMemory(
+content: string
+) {
+const memory: Memory = {
+id: Date.now().toString(),
+content,
+category: "general",
+createdAt: Date.now(),
+};
+
+saveMemory(memory);
+
+setMemories((prev) => [
+  memory,
+  ...prev,
+]);
+
+}
+
+return {
+memories,
+addMemory,
+loadMemories,
+};
+}
+
+=== FILE: frontend/src/stores/chatStore.ts ===
+
+import { create } from "zustand";
+
+import { Message } from "../types/message";
+
+interface ChatState {
+messages: Message[];
+
+addMessage: (
+message: Message
+) => void;
+
+clearMessages: () => void;
+}
+
+export const useChatStore =
+create<ChatState>((set) => ({
+messages: [],
+
+addMessage: (message) =>
+  set((state) => ({
+    messages: [
+      ...state.messages,
+      message,
+    ],
+  })),
+
+clearMessages: () =>
+  set({
+    messages: [],
+  }),
+
+}));
+
+=== FILE: frontend/src/stores/memoryStore.ts ===
+
+import { create } from "zustand";
+
+import { Memory } from "../types/memory";
+
+interface MemoryState {
+memories: Memory[];
+
+addMemory: (
+memory: Memory
+) => void;
+
+clearMemories: () => void;
+}
+
+export const useMemoryStore =
+create<MemoryState>((set) => ({
+memories: [],
+
+addMemory: (memory) =>
+  set((state) => ({
+    memories: [
+      memory,
+      ...state.memories,
+    ],
+  })),
+
+clearMemories: () =>
+  set({
+    memories: [],
+  }),
+
+}));
+
+=== FILE: frontend/src/stores/identityStore.ts ===
+
+import { create } from "zustand";
+
+import { IdentityProfile }
+from "../types/identity";
+
+interface IdentityState {
+profile:
+IdentityProfile | null;
+
+setProfile: (
+profile: IdentityProfile
+) => void;
+}
+
+export const useIdentityStore =
+create<IdentityState>((set) => ({
+profile: null,
+
+setProfile: (profile) =>
+  set({
+    profile,
+  }),
+
+}));
+
+=== FILE: frontend/src/screens/identity/IdentityScreen.tsx ===
+
+import React from "react";
+
+import {
+ScrollView,
+View,
+Text,
+StyleSheet,
+} from "react-native";
+
+import {
+COLORS,
+} from "../../constants/theme";
+
+export default function IdentityScreen() {
+return (
+<ScrollView
+style={styles.container}
+>
+<Text style={styles.title}>
+Identity
+</Text>
+
+  <View style={styles.card}>
+    <Text style={styles.label}>
+      Mission
+    </Text>
+
+    <Text style={styles.value}>
+      Not Defined
+    </Text>
+  </View>
+
+  <View style={styles.card}>
+    <Text style={styles.label}>
+      Values
+    </Text>
+
+    <Text style={styles.value}>
+      No Values Yet
+    </Text>
+  </View>
+
+  <View style={styles.card}>
+    <Text style={styles.label}>
+      Interests
+    </Text>
+
+    <Text style={styles.value}>
+      No Interests Yet
+    </Text>
+  </View>
+</ScrollView>
+
+);
+}
+
+const styles = StyleSheet.create({
+container: {
+flex: 1,
+backgroundColor:
+COLORS.background,
+padding: 16,
+},
+
+title: {
+color: COLORS.text,
+fontSize: 32,
+fontWeight: "800",
+marginBottom: 20,
+},
+
+card: {
+backgroundColor:
+COLORS.surface,
+padding: 16,
+borderRadius: 16,
+marginBottom: 16,
+},
+
+label: {
+color:
+COLORS.textSecondary,
+marginBottom: 8,
+},
+
+value: {
+color: COLORS.text,
+fontSize: 16,
+},
+});
+
+=== FILE: frontend/src/screens/evolution/EvolutionScreen.tsx ===
+
+import React from "react";
+
+import {
+View,
+Text,
+StyleSheet,
+} from "react-native";
+
+import {
+COLORS,
+} from "../../constants/theme";
+
+export default function EvolutionScreen() {
+return (
+<View style={styles.container}>
+<Text style={styles.title}>
+Evolution Engine
+</Text>
+
+  <Text style={styles.subtitle}>
+    Personal growth patterns
+    will appear here.
+  </Text>
+</View>
+
+);
+}
+
+const styles = StyleSheet.create({
+container: {
+flex: 1,
+backgroundColor:
+COLORS.background,
+justifyContent:
+"center",
+alignItems:
+"center",
+},
+
+title: {
+color: COLORS.text,
+fontSize: 30,
+fontWeight: "700",
+},
+
+subtitle: {
+color:
+COLORS.textSecondary,
+marginTop: 10,
+},
+});
+
+=== FILE: frontend/src/services/memory/MemoryExtractor.ts ===
+
+export interface ExtractedMemory {
+content: string;
+
+category: string;
+
+confidence: number;
+}
+
+export function extractMemory(
+text: string
+): ExtractedMemory | null {
+
+if (
+text.length < 10
+) {
+return null;
+}
+
+return {
+content: text,
+
+category: "general",
+
+confidence: 0.5,
+
+};
+}
+
+=== FILE: frontend/src/services/ai/AIService.ts ===
+
+import {
+LocalProvider,
+} from "./LocalProvider";
+
+const provider =
+new LocalProvider();
+
+export async function askAI(
+message: string
+) {
+return provider.sendMessage(
+message
+);
+}
+
+=== FILE: frontend/src/services/ai/LocalProvider.ts ===
+
+export class LocalProvider {
+
+async sendMessage(
+message: string
+): Promise<string> {
+
+return `
+
+Local runtime not connected.
+
+User Message:
+${message}
+`;
+}
+}
+

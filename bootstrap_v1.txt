@@ -1,0 +1,268 @@
+=== START_FILE: frontend/src/theme/theme.ts ===
+export const theme = {
+  colors: {
+    background: '#0F0F12',
+    surface: '#1E1E24',
+    primary: '#6366F1',
+    secondary: '#10B981',
+    text: '#FFFFFF',
+    textMuted: '#9CA3AF',
+    border: '#2E2E38',
+  },
+  spacing: {
+    xs: 4,
+    sm: 8,
+    md: 16,
+    lg: 24,
+    xl: 32,
+  },
+  borderRadius: {
+    sm: 4,
+    md: 8,
+    lg: 12,
+    xl: 24,
+  }
+};
+=== END_FILE: frontend/src/theme/theme.ts ===
+
+=== START_FILE: frontend/src/navigation/types.ts ===
+export type RootStackParamList = {
+  Home: undefined;
+  Chat: undefined;
+};
+=== END_FILE: frontend/src/navigation/types.ts ===
+
+=== START_FILE: frontend/App.tsx ===
+import React from 'react';
+import { StatusBar } from 'react-native';
+import { NavigationContainer } from '@react-navigation/native';
+import { createStackNavigator } from '@react-navigation/stack';
+import HomeScreen from './src/screens/HomeScreen';
+import ChatScreen from './src/screens/ChatScreen';
+import { RootStackParamList } from './src/navigation/types';
+import { theme } from './src/theme/theme';
+
+const Stack = createStackNavigator<RootStackParamList>();
+
+export default function App() {
+  return (
+    <NavigationContainer>
+      <StatusBar barStyle="light-content" backgroundColor={theme.colors.background} />
+      <Stack.Navigator
+        initialRouteName="Home"
+        screenOptions={{
+          headerStyle: {
+            backgroundColor: theme.colors.background,
+            shadowColor: 'transparent',
+            elevation: 0,
+          },
+          headerTintColor: theme.colors.text,
+          headerTitleStyle: { fontWeight: '600' },
+          cardStyle: { backgroundColor: theme.colors.background }
+        }}
+      >
+        <Stack.Screen name="Home" component={HomeScreen} options={{ headerShown: false }} />
+        <Stack.Screen name="Chat" component={ChatScreen} options={{ title: 'Transmission' }} />
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+}
+=== END_FILE: frontend/App.tsx ===
+
+=== START_FILE: frontend/src/screens/HomeScreen.tsx ===
+import React from 'react';
+import { StyleSheet, Text, View, TouchableOpacity, SafeAreaView, ScrollView } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import { StackNavigationProp } from '@react-navigation/stack';
+import { RootStackParamList } from '../navigation/types';
+import { theme } from '../theme/theme';
+
+type NavigationProp = StackNavigationProp<RootStackParamList, 'Home'>;
+
+export default function HomeScreen() {
+  const navigation = useNavigation<NavigationProp>();
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <ScrollView contentContainerStyle={styles.scrollContainer}>
+        <View style={styles.header}>
+          <Text style={styles.title}>EVOLVA</Text>
+          <Text style={styles.subtitle}>Personal Growth Operating System</Text>
+        </View>
+
+        <View style={styles.grid}>
+          <TouchableOpacity 
+            style={styles.primaryCard}
+            onPress={() => navigation.navigate('Chat')}
+          >
+            <View style={styles.cardHeaderInline}>
+              <Text style={styles.cardIcon}>💬</Text>
+              <Text style={styles.primaryCardTitle}>Open Front Door</Text>
+            </View>
+            <Text style={styles.primaryCardDesc}>
+              The entry point. Conversation feeds the pipeline.
+            </Text>
+            <View style={styles.flowBadge}>
+              <Text style={styles.flowBadgeText}>INPUT LAYER → ACTIVE</Text>
+            </View>
+          </TouchableOpacity>
+
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>System Modules</Text>
+          </View>
+
+          <View style={[styles.moduleCard, styles.disabledCard]}>
+            <View style={styles.moduleHeader}>
+              <Text style={styles.moduleIcon}>🧠</Text>
+              <View style={styles.moduleTitleContainer}>
+                <Text style={styles.moduleTitle}>Memory Engine</Text>
+                <Text style={styles.moduleStatus}>Offline - Target Block 4</Text>
+              </View>
+            </View>
+            <Text style={styles.moduleDesc}>
+              Extracts, scores, and links conversational data into permanent graph storage.
+            </Text>
+          </View>
+
+          <View style={[styles.moduleCard, styles.disabledCard]}>
+            <View style={styles.moduleHeader}>
+              <Text style={styles.moduleIcon}>👤</Text>
+              <View style={styles.moduleTitleContainer}>
+                <Text style={styles.moduleTitle}>Identity Profile</Text>
+                <Text style={styles.moduleStatus}>Offline - Target Block 5</Text>
+              </View>
+            </View>
+            <Text style={styles.moduleDesc}>
+              Maps core traits, psychological values, motivations, and evolving self-schema.
+            </Text>
+          </View>
+
+          <View style={[styles.moduleCard, styles.disabledCard]}>
+            <View style={styles.moduleHeader}>
+              <Text style={styles.moduleIcon}>📊</Text>
+              <View style={styles.moduleTitleContainer}>
+                <Text style={styles.moduleTitle}>Insight System</Text>
+                <Text style={styles.moduleStatus}>Offline - Target Block 6</Text>
+              </View>
+            </View>
+            <Text style={styles.moduleDesc}>
+              Analyzes multi-turn long-term continuity to isolate behavior trends and growth anomalies.
+            </Text>
+          </View>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: theme.colors.background },
+  scrollContainer: { padding: theme.spacing.md },
+  header: { marginTop: theme.spacing.xl, marginBottom: theme.spacing.xl, borderBottomWidth: 1, borderBottomColor: theme.colors.border, paddingBottom: theme.spacing.md },
+  title: { fontSize: 38, fontWeight: '900', color: theme.colors.text, letterSpacing: 2 },
+  subtitle: { fontSize: 14, color: theme.colors.textMuted, marginTop: theme.spacing.xs, textTransform: 'uppercase', letterSpacing: 1 },
+  grid: { gap: theme.spacing.md },
+  primaryCard: { backgroundColor: '#1A1B2F', padding: theme.spacing.lg, borderRadius: theme.borderRadius.lg, borderWidth: 1, borderColor: theme.colors.primary },
+  cardHeaderInline: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.sm, marginBottom: theme.spacing.sm },
+  primaryCardTitle: { fontSize: 22, fontWeight: '700', color: theme.colors.text },
+  primaryCardDesc: { fontSize: 14, color: '#A5A6F6', lineHeight: 20 },
+  flowBadge: { alignSelf: 'flex-start', backgroundColor: 'rgba(99, 102, 241, 0.2)', paddingHorizontal: theme.spacing.sm, paddingVertical: theme.spacing.xs, borderRadius: theme.borderRadius.sm, marginTop: theme.spacing.md, borderWidth: 1, borderColor: theme.colors.primary },
+  flowBadgeText: { color: '#C7C8FF', fontSize: 11, fontWeight: '700', letterSpacing: 1 },
+  sectionHeader: { marginTop: theme.spacing.md, marginBottom: theme.spacing.xs },
+  sectionTitle: { fontSize: 13, fontWeight: '700', color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: 1.5 },
+  moduleCard: { backgroundColor: theme.colors.surface, padding: theme.spacing.md, borderRadius: theme.borderRadius.lg, borderWidth: 1, borderColor: theme.colors.border },
+  disabledCard: { opacity: 0.5 },
+  moduleHeader: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.md, marginBottom: theme.spacing.sm },
+  moduleIcon: { fontSize: 24, color: theme.colors.textMuted },
+  moduleTitleContainer: { flex: 1 },
+  moduleTitle: { fontSize: 16, fontWeight: '600', color: theme.colors.text },
+  moduleStatus: { fontSize: 11, color: theme.colors.textMuted, fontFamily: 'monospace', marginTop: 2 },
+  moduleDesc: { fontSize: 13, color: theme.colors.textMuted, lineHeight: 18 }
+});
+=== END_FILE: frontend/src/screens/HomeScreen.tsx ===
+
+=== START_FILE: frontend/src/screens/ChatScreen.tsx ===
+import React, { useState, useRef } from 'react';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, FlatList, SafeAreaView, KeyboardAvoidingView, Platform } from 'react-native';
+import { theme } from '../theme/theme';
+
+interface Message {
+  id: string;
+  text: string;
+  sender: 'user' | 'system';
+}
+
+export default function ChatScreen() {
+  const [messages, setMessages] = useState<Message[]>([
+    { id: '1', text: "Core Pipeline Entrypoint Active. System Memory Offline. Input layer open.", sender: 'system' }
+  ]);
+  const [inputText, setInputText] = useState('');
+  const flatListRef = useRef<FlatList>(null);
+
+  const handleSend = () => {
+    if (!inputText.trim()) return;
+
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      text: inputText,
+      sender: 'user',
+    };
+
+    setMessages((prev) => [...prev, userMessage]);
+    setInputText('');
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <KeyboardAvoidingView 
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
+        style={styles.container}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+      >
+        <FlatList
+          ref={flatListRef}
+          data={messages}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => (
+            <View style={[
+              styles.messageBubble, 
+              item.sender === 'user' ? styles.userBubble : styles.systemBubble
+            ]}>
+              <Text style={styles.messageText}>{item.text}</Text>
+            </View>
+          )}
+          contentContainerStyle={styles.chatList}
+          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+        />
+
+        <View style={styles.inputContainer}>
+          <TextInput
+            style={styles.input}
+            placeholder="Log raw perspective..."
+            placeholderTextColor={theme.colors.textMuted}
+            value={inputText}
+            onChangeText={setInputText}
+            multiline
+          />
+          <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
+            <Text style={styles.sendButtonText}>Send</Text>
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: theme.colors.background },
+  chatList: { padding: theme.spacing.md, gap: theme.spacing.sm },
+  messageBubble: { padding: theme.spacing.md, borderRadius: theme.borderRadius.lg, maxWidth: '85%' },
+  userBubble: { backgroundColor: theme.colors.primary, alignSelf: 'flex-end', borderBottomRightRadius: theme.borderRadius.xs },
+  systemBubble: { backgroundColor: theme.colors.surface, alignSelf: 'flex-start', borderWidth: 1, borderColor: theme.colors.border, borderBottomLeftRadius: theme.borderRadius.xs },
+  messageText: { color: theme.colors.text, fontSize: 16, lineHeight: 22 },
+  inputContainer: { flexDirection: 'row', padding: theme.spacing.md, backgroundColor: theme.colors.surface, borderTopWidth: 1, borderColor: theme.colors.border, alignItems: 'center' },
+  input: { flex: 1, backgroundColor: theme.colors.background, color: theme.colors.text, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm, borderRadius: theme.borderRadius.md, marginRight: theme.spacing.sm, fontSize: 16, maxHeight: 100 },
+  sendButton: { backgroundColor: theme.colors.secondary, justifyContent: 'center', paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.sm, borderRadius: theme.borderRadius.md },
+  sendButtonText: { color: theme.colors.text, fontWeight: 'bold' }
+});
+=== END_FILE: frontend/src/screens/ChatScreen.tsx ===

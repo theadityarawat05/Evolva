@@ -1,0 +1,3674 @@
+=== START_FILE: src/services/ai/types.ts ===
+
+export type AIProviderType = "local" | "remote";
+
+export type MessageRole =
+  | "system"
+  | "user"
+  | "assistant";
+
+export interface ChatMessage {
+  id: string;
+  role: MessageRole;
+  content: string;
+  createdAt: number;
+}
+
+export interface GenerationOptions {
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+  maxTokens?: number;
+  stop?: string[];
+  stream?: boolean;
+}
+
+export interface TokenUsage {
+  prompt: number;
+  completion: number;
+  total: number;
+}
+
+export interface AIResponse {
+  id: string;
+  text: string;
+  usage?: TokenUsage;
+  finishReason: "stop" | "length" | "cancelled" | "error";
+}
+
+export interface AIHealth {
+  ready: boolean;
+  model: string;
+  contextSize: number;
+}
+
+export interface AIProvider {
+  readonly type: AIProviderType;
+
+  initialize(): Promise<void>;
+
+  generate(
+    messages: ChatMessage[],
+    options?: GenerationOptions,
+  ): Promise<AIResponse>;
+
+  health(): Promise<AIHealth>;
+
+  dispose(): Promise<void>;
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/config/ai.ts ===
+
+export const AI_CONFIG = Object.freeze({
+  MODEL_PATH:
+    "/storage/emulated/0/Evolva/models/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+
+  MODEL_NAME: "Qwen2.5-1.5B-Instruct",
+
+  CONTEXT_SIZE: 4096,
+
+  THREADS: 4,
+
+  GPU_LAYERS: 99,
+
+  TEMPERATURE: 0.7,
+
+  TOP_P: 0.95,
+
+  TOP_K: 40,
+
+  MAX_TOKENS: 512,
+
+  STOP: ["</s>"],
+
+  USE_MMAP: true,
+
+  USE_MLOCK: false,
+} as const);
+
+export type AIConfig = typeof AI_CONFIG;
+
+=== END_FILE ===
+
+=== START_FILE: src/config/runtime.ts ===
+
+export const RUNTIME_CONFIG = Object.freeze({
+  AUTO_INITIALIZE: true,
+
+  ENABLE_STREAMING: true,
+
+  ENABLE_LOGGING: true,
+
+  ENABLE_MEMORY: false,
+
+  ENABLE_REASONING: true,
+
+  MAX_CONVERSATION_MESSAGES: 20,
+
+  MAX_RETRY_COUNT: 2,
+
+  INITIALIZATION_TIMEOUT_MS: 30000,
+} as const);
+
+export type RuntimeConfig = typeof RUNTIME_CONFIG;
+
+=== END_FILE ===
+
+=== START_FILE: src/utils/Logger.ts ===
+
+export enum LogLevel {
+  DEBUG = "DEBUG",
+  INFO = "INFO",
+  WARN = "WARN",
+  ERROR = "ERROR",
+}
+
+class Logger {
+
+  private enabled = true;
+
+  setEnabled(enabled: boolean) {
+    this.enabled = enabled;
+  }
+
+  private print(
+    level: LogLevel,
+    message: string,
+    data?: unknown,
+  ) {
+    if (!this.enabled) return;
+
+    const time = new Date().toISOString();
+
+    if (data !== undefined) {
+      console.log(
+        `[${time}] [${level}] ${message}`,
+        data,
+      );
+      return;
+    }
+
+    console.log(
+      `[${time}] [${level}] ${message}`,
+    );
+  }
+
+  debug(
+    message: string,
+    data?: unknown,
+  ) {
+    this.print(
+      LogLevel.DEBUG,
+      message,
+      data,
+    );
+  }
+
+  info(
+    message: string,
+    data?: unknown,
+  ) {
+    this.print(
+      LogLevel.INFO,
+      message,
+      data,
+    );
+  }
+
+  warn(
+    message: string,
+    data?: unknown,
+  ) {
+    this.print(
+      LogLevel.WARN,
+      message,
+      data,
+    );
+  }
+
+  error(
+    message: string,
+    data?: unknown,
+  ) {
+    this.print(
+      LogLevel.ERROR,
+      message,
+      data,
+    );
+  }
+}
+
+export default new Logger();
+
+=== END_FILE ===
+
+=== START_FILE: src/utils/Errors.ts ===
+
+export class AIError extends Error {
+
+  constructor(
+    message: string,
+  ) {
+    super(message);
+
+    this.name = "AIError";
+  }
+
+}
+
+export class RuntimeError extends AIError {
+
+  constructor(
+    message: string,
+  ) {
+    super(message);
+
+    this.name = "RuntimeError";
+  }
+
+}
+
+export class ModelLoadError extends AIError {
+
+  constructor(
+    message: string,
+  ) {
+    super(message);
+
+    this.name = "ModelLoadError";
+  }
+
+}
+
+export class GenerationError extends AIError {
+
+  constructor(
+    message: string,
+  ) {
+    super(message);
+
+    this.name = "GenerationError";
+  }
+
+}
+
+export class InitializationError extends AIError {
+
+  constructor(
+    message: string,
+  ) {
+    super(message);
+
+    this.name = "InitializationError";
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/utils/TokenCounter.ts ===
+
+import { TokenUsage } from "../services/ai/types";
+
+export default class TokenCounter {
+
+  static estimateTokens(
+    text: string,
+  ): number {
+
+    if (!text.trim()) {
+      return 0;
+    }
+
+    return Math.ceil(
+      text.length / 4,
+    );
+
+  }
+
+  static buildUsage(
+    prompt: string,
+    completion: string,
+  ): TokenUsage {
+
+    const promptTokens =
+      this.estimateTokens(prompt);
+
+    const completionTokens =
+      this.estimateTokens(completion);
+
+    return {
+
+      prompt: promptTokens,
+
+      completion: completionTokens,
+
+      total:
+        promptTokens +
+        completionTokens,
+
+    };
+
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/utils/ContextWindow.ts ===
+
+import {
+  ChatMessage,
+} from "../services/ai/types";
+
+export default class ContextWindow {
+
+  static trim(
+    messages: ChatMessage[],
+    maxMessages: number,
+  ): ChatMessage[] {
+
+    if (
+      messages.length <=
+      maxMessages
+    ) {
+      return messages;
+    }
+
+    return messages.slice(
+      messages.length -
+        maxMessages,
+    );
+
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/SystemPrompt.ts ===
+
+export const SYSTEM_PROMPT = `
+You are Evolva.
+
+You are not a generic chatbot.
+
+Your purpose is to help the user think, learn, remember, build, and grow.
+
+Rules:
+
+- Never invent memories.
+- Never claim experiences you do not have.
+- Be concise unless deeper reasoning is requested.
+- Prioritize accuracy over confidence.
+- Maintain conversation continuity.
+- If memory is unavailable, continue naturally without pretending to remember.
+- Be calm, professional and analytical.
+- Think step-by-step before answering difficult questions.
+`;
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/PromptTemplates.ts ===
+
+import { ChatMessage } from "./types";
+import { SYSTEM_PROMPT } from "./SystemPrompt";
+
+export default class PromptTemplates {
+
+  static build(
+    history: ChatMessage[],
+    userMessage: string,
+  ): ChatMessage[] {
+
+    return [
+
+      {
+        id: "system",
+        role: "system",
+        content: SYSTEM_PROMPT,
+        createdAt: Date.now(),
+      },
+
+      ...history,
+
+      {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: userMessage,
+        createdAt: Date.now(),
+      },
+
+    ];
+
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/PromptBuilder.ts ===
+
+import {
+  ChatMessage,
+} from "./types";
+
+import PromptTemplates
+from "./PromptTemplates";
+
+export default class PromptBuilder {
+
+  static buildPrompt(
+    history: ChatMessage[],
+    message: string,
+  ): ChatMessage[] {
+
+    return PromptTemplates.build(
+      history,
+      message,
+    );
+
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/AIProvider.ts ===
+
+import {
+  AIHealth,
+  AIProvider,
+  AIResponse,
+  ChatMessage,
+  GenerationOptions,
+} from "./types";
+
+export abstract class BaseAIProvider
+implements AIProvider {
+
+  abstract readonly type:
+    "local" | "remote";
+
+  abstract initialize():
+    Promise<void>;
+
+  abstract generate(
+    messages: ChatMessage[],
+    options?: GenerationOptions,
+  ): Promise<AIResponse>;
+
+  abstract health():
+    Promise<AIHealth>;
+
+  abstract dispose():
+    Promise<void>;
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/ModelRegistry.ts ===
+
+export interface RegisteredModel {
+
+  id: string;
+
+  name: string;
+
+  path: string;
+
+  contextSize: number;
+
+  gpuLayers: number;
+
+  enabled: boolean;
+
+}
+
+export default class ModelRegistry {
+
+  private static readonly models:
+    RegisteredModel[] = [
+
+    {
+      id: "qwen2.5-1.5b",
+
+      name: "Qwen2.5-1.5B-Instruct",
+
+      path:
+        "/storage/emulated/0/Evolva/models/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+
+      contextSize: 4096,
+
+      gpuLayers: 99,
+
+      enabled: true,
+    },
+
+  ];
+
+  static getDefault(): RegisteredModel {
+
+    const model =
+      this.models.find(
+        m => m.enabled,
+      );
+
+    if (!model) {
+      throw new Error(
+        "No active model registered.",
+      );
+    }
+
+    return model;
+
+  }
+
+  static list() {
+
+    return this.models;
+
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/ModelValidator.ts ===
+
+import RNFS from "react-native-fs";
+
+import {
+  RegisteredModel,
+} from "./ModelRegistry";
+
+export default class ModelValidator {
+
+  static async validate(
+    model: RegisteredModel,
+  ) {
+
+    const exists =
+      await RNFS.exists(
+        model.path,
+      );
+
+    if (!exists) {
+
+      throw new Error(
+        `Model not found:\n${model.path}`,
+      );
+
+    }
+
+    return true;
+
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/ModelManager.ts ===
+
+import ModelRegistry
+from "./ModelRegistry";
+
+import ModelValidator
+from "./ModelValidator";
+
+export default class ModelManager {
+
+  private initialized =
+    false;
+
+  async initialize() {
+
+    if (
+      this.initialized
+    ) {
+      return;
+    }
+
+    const model =
+      ModelRegistry
+      .getDefault();
+
+    await ModelValidator
+      .validate(model);
+
+    this.initialized =
+      true;
+
+  }
+
+  getModel() {
+
+    return ModelRegistry
+      .getDefault();
+
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/index.ts ===
+
+export * from "./types";
+
+export {
+  default as PromptBuilder,
+}
+from "./PromptBuilder";
+
+export {
+  BaseAIProvider,
+}
+from "./AIProvider";
+
+export {
+  default as ModelManager,
+}
+from "./ModelManager";
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/RuntimeState.ts ===
+
+export enum RuntimeStatus {
+  IDLE = "IDLE",
+  INITIALIZING = "INITIALIZING",
+  READY = "READY",
+  GENERATING = "GENERATING",
+  ERROR = "ERROR",
+  DISPOSED = "DISPOSED",
+}
+
+export interface RuntimeMetrics {
+  loadTime: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  generationTime: number;
+}
+
+export interface RuntimeState {
+
+  status: RuntimeStatus;
+
+  initialized: boolean;
+
+  modelLoaded: boolean;
+
+  currentModel?: string;
+
+  metrics: RuntimeMetrics;
+
+}
+
+export const DEFAULT_RUNTIME_STATE: RuntimeState = {
+
+  status: RuntimeStatus.IDLE,
+
+  initialized: false,
+
+  modelLoaded: false,
+
+  currentModel: undefined,
+
+  metrics: {
+
+    loadTime: 0,
+
+    promptTokens: 0,
+
+    completionTokens: 0,
+
+    totalTokens: 0,
+
+    generationTime: 0,
+
+  },
+
+};
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/Runtime.ts ===
+
+import {
+  initLlama,
+  type LlamaContext,
+} from "llama.rn";
+
+import {
+  AI_CONFIG,
+} from "../../config/ai";
+
+import Logger
+from "../../utils/Logger";
+
+import ModelManager
+from "./ModelManager";
+
+import {
+  RuntimeStatus,
+} from "./RuntimeState";
+
+export default class Runtime {
+
+  private context:
+    LlamaContext | null = null;
+
+  private status =
+    RuntimeStatus.IDLE;
+
+  private modelManager =
+    new ModelManager();
+
+  async initialize() {
+
+    if (
+      this.context
+    ) {
+
+      return;
+
+    }
+
+    this.status =
+      RuntimeStatus.INITIALIZING;
+
+    await this.modelManager
+      .initialize();
+
+    const model =
+      this.modelManager
+      .getModel();
+
+    Logger.info(
+      "Loading model..."
+    );
+
+    this.context =
+      await initLlama({
+
+        model: model.path,
+
+        n_ctx:
+          AI_CONFIG.CONTEXT_SIZE,
+
+        n_threads:
+          AI_CONFIG.THREADS,
+
+        n_gpu_layers:
+          AI_CONFIG.GPU_LAYERS,
+
+        use_mmap:
+          AI_CONFIG.USE_MMAP,
+
+        use_mlock:
+          AI_CONFIG.USE_MLOCK,
+
+      });
+
+    this.status =
+      RuntimeStatus.READY;
+
+    Logger.info(
+      "Runtime Ready."
+    );
+
+  }
+
+  getContext() {
+
+    if (
+      !this.context
+    ) {
+
+      throw new Error(
+        "Runtime not initialized."
+      );
+
+    }
+
+    return this.context;
+
+  }
+
+  getStatus() {
+
+    return this.status;
+
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/stores/runtimeStore.ts ===
+
+import {
+  create,
+} from "zustand";
+
+import Runtime
+from "../services/ai/Runtime";
+
+interface RuntimeStore {
+
+  runtime:
+    Runtime;
+
+  ready:
+    boolean;
+
+  initialize():
+    Promise<void>;
+
+}
+
+export const useRuntimeStore =
+create<RuntimeStore>(
+(set)=>({
+
+runtime:
+new Runtime(),
+
+ready:false,
+
+async initialize(){
+
+const runtime =
+new Runtime();
+
+await runtime
+.initialize();
+
+set({
+
+runtime,
+
+ready:true,
+
+});
+
+},
+
+}),
+);
+
+=== END_FILE ===
+
+=== START_FILE: src/hooks/useRuntime.ts ===
+
+import {
+  useEffect,
+} from "react";
+
+import {
+  useRuntimeStore,
+} from "../stores/runtimeStore";
+
+export default function
+useRuntime(){
+
+const {
+
+initialize,
+
+ready,
+
+runtime,
+
+} =
+useRuntimeStore();
+
+useEffect(()=>{
+
+initialize();
+
+},[]);
+
+return{
+
+runtime,
+
+ready,
+
+};
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/LocalProvider.ts ===
+
+import {
+  BaseAIProvider,
+} from "./AIProvider";
+
+import {
+  AIHealth,
+  AIResponse,
+  ChatMessage,
+  GenerationOptions,
+} from "./types";
+
+import Runtime
+from "./Runtime";
+
+import TokenCounter
+from "../../utils/TokenCounter";
+
+export default class LocalProvider
+extends BaseAIProvider {
+
+  readonly type = "local" as const;
+
+  private runtime =
+    new Runtime();
+
+  async initialize() {
+
+    await this.runtime
+      .initialize();
+
+  }
+
+  async generate(
+
+    messages:
+      ChatMessage[],
+
+    options?:
+      GenerationOptions,
+
+  ): Promise<AIResponse> {
+
+    const context =
+      this.runtime
+      .getContext();
+
+    const result =
+      await context
+      .completion({
+
+        messages,
+
+        temperature:
+          options?.temperature ??
+          0.7,
+
+        top_p:
+          options?.topP ??
+          0.95,
+
+        top_k:
+          options?.topK ??
+          40,
+
+        n_predict:
+          options?.maxTokens ??
+          512,
+
+        stop:
+          options?.stop ??
+          ["</s>"],
+
+      });
+
+    const last =
+      messages[
+        messages.length-1
+      ];
+
+    return {
+
+      id:
+        Date.now()
+        .toString(),
+
+      text:
+        result.text,
+
+      finishReason:
+        "stop",
+
+      usage:
+        TokenCounter
+        .buildUsage(
+
+          last.content,
+
+          result.text,
+
+        ),
+
+    };
+
+  }
+
+  async health():
+    Promise<AIHealth>{
+
+    return{
+
+      ready:true,
+
+      model:
+      "Qwen2.5",
+
+      contextSize:
+      4096,
+
+    };
+
+  }
+
+  async dispose(){
+
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/AIService.ts ===
+
+import LocalProvider
+from "./LocalProvider";
+
+import PromptBuilder
+from "./PromptBuilder";
+
+import {
+  AIResponse,
+  ChatMessage,
+} from "./types";
+
+export default class AIService {
+
+  private provider =
+    new LocalProvider();
+
+  async initialize(){
+
+    await this.provider
+      .initialize();
+
+  }
+
+  async ask(
+
+    history:
+      ChatMessage[],
+
+    message:
+      string,
+
+  ):Promise<AIResponse>{
+
+    const prompt =
+
+      PromptBuilder
+      .buildPrompt(
+
+        history,
+
+        message,
+
+      );
+
+    return this.provider
+      .generate(
+        prompt,
+      );
+
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/stores/chatStore.ts ===
+
+import {
+  create,
+} from "zustand";
+
+import {
+  ChatMessage,
+} from "../services/ai";
+
+interface ChatStore{
+
+messages:
+ChatMessage[];
+
+add(
+message:
+ChatMessage,
+):void;
+
+clear():
+void;
+
+}
+
+export const
+useChatStore=
+create<ChatStore>(
+(set)=>({
+
+messages:[],
+
+add(message){
+
+set(state=>({
+
+messages:[
+
+...state.messages,
+
+message,
+
+],
+
+}));
+
+},
+
+clear(){
+
+set({
+
+messages:[],
+
+});
+
+},
+
+}),
+);
+
+=== END_FILE ===
+
+=== START_FILE: src/hooks/useChat.ts ===
+
+import {
+  useState,
+} from "react";
+
+import AIService
+from "../services/ai/AIService";
+
+import {
+  useChatStore,
+} from "../stores/chatStore";
+
+export default function
+useChat(){
+
+const{
+
+messages,
+
+add,
+
+}=
+useChatStore();
+
+const
+[loading,
+setLoading]=
+useState(false);
+
+const
+service=
+new AIService();
+
+async function
+send(
+text:string,
+){
+
+setLoading(true);
+
+const user={
+
+id:
+Date.now()
+.toString(),
+
+role:"user",
+
+content:text,
+
+createdAt:
+Date.now(),
+
+};
+
+add(user);
+
+const response=
+
+await service.ask(
+
+messages,
+
+text,
+
+);
+
+add({
+
+id:
+response.id,
+
+role:
+"assistant",
+
+content:
+response.text,
+
+createdAt:
+Date.now(),
+
+});
+
+setLoading(false);
+
+}
+
+return{
+
+messages,
+
+loading,
+
+send,
+
+};
+
+}
+
+=== END_FILE ===
+
+
+=== START_FILE: src/screens/chat/ChatScreen.tsx ===
+
+import React, {
+  useEffect,
+} from "react";
+
+import {
+  View,
+  FlatList,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ActivityIndicator,
+} from "react-native";
+
+import useChat
+from "../../hooks/useChat";
+
+import {
+  AI_CONFIG,
+} from "../../config/ai";
+
+export default function ChatScreen(){
+
+const{
+
+messages,
+
+loading,
+
+send,
+
+}=useChat();
+
+const
+[input,
+setInput]=
+React.useState("");
+
+async function
+handleSend(){
+
+if(
+!input.trim()
+)return;
+
+const text=input;
+
+setInput("");
+
+await send(text);
+
+}
+
+return(
+
+<View style={styles.container}>
+
+<FlatList
+
+data={messages}
+
+keyExtractor={
+(item)=>item.id
+}
+
+contentContainerStyle={
+styles.list
+}
+
+renderItem={({
+item,
+})=>(
+
+<View
+style={[
+styles.bubble,
+
+item.role===
+"user"
+
+?
+
+styles.user
+
+:
+
+styles.ai,
+
+]}>
+
+<Text
+style={
+styles.text
+}>
+
+{item.content}
+
+</Text>
+
+</View>
+
+)}
+
+/>
+
+{
+
+loading&&(
+
+<View
+style={
+styles.loading
+}>
+
+<ActivityIndicator/>
+
+<Text>
+
+Thinking...
+
+</Text>
+
+</View>
+
+)
+
+}
+
+<View
+style={
+styles.bottom
+}>
+
+<TextInput
+
+value={input}
+
+onChangeText={
+setInput
+}
+
+placeholder=
+"Message Evolva"
+
+style={
+styles.input
+}
+
+/>
+
+<TouchableOpacity
+
+style={
+styles.button
+}
+
+onPress={
+handleSend
+}
+
+>
+
+<Text
+style={
+styles.buttonText
+}>
+
+Send
+
+</Text>
+
+</TouchableOpacity>
+
+</View>
+
+</View>
+
+);
+
+}
+
+const styles=
+StyleSheet.create({
+
+container:{
+
+flex:1,
+
+backgroundColor:
+"#0F1115",
+
+},
+
+list:{
+
+padding:16,
+
+},
+
+bubble:{
+
+padding:14,
+
+borderRadius:18,
+
+marginBottom:10,
+
+maxWidth:"85%",
+
+},
+
+user:{
+
+alignSelf:"flex-end",
+
+backgroundColor:"#4F46E5",
+
+},
+
+ai:{
+
+alignSelf:"flex-start",
+
+backgroundColor:"#22252B",
+
+},
+
+text:{
+
+color:"#FFFFFF",
+
+fontSize:16,
+
+},
+
+loading:{
+
+flexDirection:"row",
+
+alignItems:"center",
+
+paddingHorizontal:20,
+
+gap:10,
+
+},
+
+bottom:{
+
+flexDirection:"row",
+
+padding:16,
+
+borderTopWidth:1,
+
+borderTopColor:"#2A2A2A",
+
+},
+
+input:{
+
+flex:1,
+
+backgroundColor:"#20242A",
+
+borderRadius:14,
+
+paddingHorizontal:14,
+
+color:"#FFF",
+
+},
+
+button:{
+
+marginLeft:10,
+
+paddingHorizontal:18,
+
+justifyContent:"center",
+
+borderRadius:14,
+
+backgroundColor:"#4F46E5",
+
+},
+
+buttonText:{
+
+color:"#FFF",
+
+fontWeight:"700",
+
+},
+
+});
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/bootstrap.ts ===
+
+import AIService
+from "./AIService";
+
+class Bootstrap{
+
+private service=
+new AIService();
+
+async start(){
+
+await this.service
+.initialize();
+
+}
+
+}
+
+export default
+new Bootstrap();
+
+=== END_FILE ===
+
+=== START_FILE: src/AppBootstrap.ts ===
+
+import Bootstrap
+from "./services/ai/bootstrap";
+
+export async function
+initializeApp(){
+
+await Bootstrap
+.start();
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/HealthCheck.ts ===
+
+import AIService
+from "./AIService";
+
+export default
+class HealthCheck{
+
+static async run(){
+
+const ai=
+new AIService();
+
+await ai
+.initialize();
+
+return true;
+
+}
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/version.ts ===
+
+export const
+AI_RUNTIME_VERSION=
+"3.0.0";
+
+export const
+MODEL_VERSION=
+"Qwen2.5-1.5B";
+
+export const
+BOOTSTRAP_VERSION=
+"V3-Part1";
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/Conversation.ts === import { randomUUID } from 'crypto';
+
+export type ConversationRole = 'system' | 'user' | 'assistant' | 'tool';
+
+export type MessageStatus = | 'pending' | 'streaming' | 'completed' | 'failed' | 'cancelled';
+
+export interface ConversationMessage { readonly id: string; readonly role: ConversationRole; content: string; status: MessageStatus; tokenCount: number; readonly createdAt: number; updatedAt: number; metadata: Readonly<Record<string, unknown>>; }
+
+export interface ConversationSnapshot { readonly id: string; readonly title: string; readonly createdAt: number; readonly updatedAt: number; readonly messages: readonly ConversationMessage[]; readonly promptTokens: number; readonly completionTokens: number; readonly totalTokens: number; }
+
+export class Conversation { private readonly id: string; private title: string; private readonly createdAt: number; private updatedAt: number; private readonly messages: ConversationMessage[] = [];
+
+private promptTokens = 0; private completionTokens = 0;
+
+constructor(title = 'New Conversation', id?: string) { const now = Date.now();
+
+this.id = id ?? randomUUID();
+this.title = title.trim() || 'New Conversation';
+this.createdAt = now;
+this.updatedAt = now;
+
+}
+
+public getId(): string { return this.id; }
+
+public getTitle(): string { return this.title; }
+
+public rename(title: string): void { const value = title.trim();
+
+if (!value) {
+  throw new Error('Conversation title cannot be empty.');
+}
+
+this.title = value;
+this.touch();
+
+}
+
+public getMessages(): readonly ConversationMessage[] { return this.messages; }
+
+public append( role: ConversationRole, content: string, tokenCount = 0, metadata: Record<string, unknown> = {}, ): ConversationMessage { const now = Date.now();
+
+const message: ConversationMessage = {
+  id: randomUUID(),
+  role,
+  content,
+  status: 'completed',
+  tokenCount,
+  createdAt: now,
+  updatedAt: now,
+  metadata,
+};
+
+this.messages.push(message);
+
+if (role === 'assistant') {
+  this.completionTokens += tokenCount;
+} else {
+  this.promptTokens += tokenCount;
+}
+
+this.touch();
+
+return message;
+
+}
+
+public beginStreaming(): ConversationMessage { const now = Date.now();
+
+const message: ConversationMessage = {
+  id: randomUUID(),
+  role: 'assistant',
+  content: '',
+  status: 'streaming',
+  tokenCount: 0,
+  createdAt: now,
+  updatedAt: now,
+  metadata: {},
+};
+
+this.messages.push(message);
+this.touch();
+
+return message;
+
+}
+
+public streamChunk(messageId: string, chunk: string): void { const message = this.find(messageId);
+
+if (message.status !== 'streaming') {
+  throw new Error('Message is not streaming.');
+}
+
+message.content += chunk;
+message.updatedAt = Date.now();
+
+this.touch();
+
+}
+
+public finishStreaming( messageId: string, tokenCount: number, ): ConversationMessage { const message = this.find(messageId);
+
+message.status = 'completed';
+message.tokenCount = tokenCount;
+message.updatedAt = Date.now();
+
+this.completionTokens += tokenCount;
+
+this.touch();
+
+return message;
+
+}
+
+public failMessage(messageId: string): void { const message = this.find(messageId);
+
+message.status = 'failed';
+message.updatedAt = Date.now();
+
+this.touch();
+
+}
+
+public removeMessage(messageId: string): void { const index = this.messages.findIndex(m => m.id === messageId);
+
+if (index < 0) {
+  return;
+}
+
+this.messages.splice(index, 1);
+
+this.touch();
+
+}
+
+public clear(): void { this.messages.length = 0; this.promptTokens = 0; this.completionTokens = 0;
+
+this.touch();
+
+}
+
+public export(): ConversationSnapshot { return { id: this.id, title: this.title, createdAt: this.createdAt, updatedAt: this.updatedAt, messages: this.messages.map(message => ({ ...message, metadata: { ...message.metadata }, })), promptTokens: this.promptTokens, completionTokens: this.completionTokens, totalTokens: this.promptTokens + this.completionTokens, }; }
+
+private find(messageId: string): ConversationMessage { const message = this.messages.find(m => m.id === messageId);
+
+if (!message) {
+  throw new Error(`Message "${messageId}" not found.`);
+}
+
+return message;
+
+}
+
+private touch(): void { this.updatedAt = Date.now(); } }
+ === END_FILE ===
+
+=== START_FILE: src/services/ai/Session.ts === import { randomUUID } from 'crypto'; import { Conversation } from './Conversation';
+
+export interface SessionSnapshot { readonly id: string; readonly createdAt: number; readonly updatedAt: number; readonly activeConversationId: string | null; readonly conversationIds: readonly string[]; }
+
+export class Session { private readonly id: string; private readonly createdAt: number; private updatedAt: number;
+
+private readonly conversations = new Map<string, Conversation>(); private activeConversationId: string | null = null;
+
+constructor(id?: string) { const now = Date.now();
+
+this.id = id ?? randomUUID();
+this.createdAt = now;
+this.updatedAt = now;
+
+}
+
+public getId(): string { return this.id; }
+
+public createConversation(title = 'New Conversation'): Conversation { const conversation = new Conversation(title);
+
+this.conversations.set(conversation.getId(), conversation);
+
+this.activeConversationId = conversation.getId();
+
+this.touch();
+
+return conversation;
+
+}
+
+public addConversation(conversation: Conversation): void { const id = conversation.getId();
+
+if (this.conversations.has(id)) {
+  throw new Error(`Conversation "${id}" already exists.`);
+}
+
+this.conversations.set(id, conversation);
+
+if (this.activeConversationId === null) {
+  this.activeConversationId = id;
+}
+
+this.touch();
+
+}
+
+public getConversation(id: string): Conversation { const conversation = this.conversations.get(id);
+
+if (!conversation) {
+  throw new Error(`Conversation "${id}" not found.`);
+}
+
+return conversation;
+
+}
+
+public getActiveConversation(): Conversation | null { if (!this.activeConversationId) { return null; }
+
+return this.getConversation(this.activeConversationId);
+
+}
+
+public setActiveConversation(id: string): void { if (!this.conversations.has(id)) { throw new Error(Conversation "${id}" not found.); }
+
+this.activeConversationId = id;
+
+this.touch();
+
+}
+
+public removeConversation(id: string): void { if (!this.conversations.delete(id)) { return; }
+
+if (this.activeConversationId === id) {
+  const next = this.conversations.keys().next();
+
+  this.activeConversationId = next.done ? null : next.value;
+}
+
+this.touch();
+
+}
+
+public hasConversation(id: string): boolean { return this.conversations.has(id); }
+
+public getConversations(): readonly Conversation[] { return Array.from(this.conversations.values()); }
+
+public getConversationCount(): number { return this.conversations.size; }
+
+public clear(): void { this.conversations.clear(); this.activeConversationId = null;
+
+this.touch();
+
+}
+
+public export(): SessionSnapshot { return { id: this.id, createdAt: this.createdAt, updatedAt: this.updatedAt, activeConversationId: this.activeConversationId, conversationIds: Array.from(this.conversations.keys()), }; }
+
+private touch(): void { this.updatedAt = Date.now(); } }
+ === END_FILE ===
+
+=== START_FILE: src/services/ai/ConversationMetadata.ts === import { randomUUID } from 'crypto';
+
+export interface ConversationMetadataSnapshot { readonly id: string; readonly sessionId: string; readonly title: string; readonly summary: string; readonly tags: readonly string[]; readonly createdAt: number; readonly updatedAt: number; readonly lastMessageAt: number | null; readonly archived: boolean; readonly pinned: boolean; readonly messageCount: number; }
+
+export class ConversationMetadata { private readonly id: string; private readonly sessionId: string;
+
+private title: string; private summary = '';
+
+private readonly tags = new Set<string>();
+
+private readonly createdAt: number; private updatedAt: number; private lastMessageAt: number | null = null;
+
+private archived = false; private pinned = false; private messageCount = 0;
+
+constructor(sessionId: string, title: string, id?: string) { if (!sessionId.trim()) { throw new Error('Session id cannot be empty.'); }
+
+if (!title.trim()) {
+  throw new Error('Conversation title cannot be empty.');
+}
+
+const now = Date.now();
+
+this.id = id ?? randomUUID();
+this.sessionId = sessionId;
+this.title = title.trim();
+this.createdAt = now;
+this.updatedAt = now;
+
+}
+
+public getId(): string { return this.id; }
+
+public getSessionId(): string { return this.sessionId; }
+
+public getTitle(): string { return this.title; }
+
+public rename(title: string): void { const value = title.trim();
+
+if (!value) {
+  throw new Error('Conversation title cannot be empty.');
+}
+
+this.title = value;
+this.touch();
+
+}
+
+public getSummary(): string { return this.summary; }
+
+public updateSummary(summary: string): void { this.summary = summary.trim(); this.touch(); }
+
+public addTag(tag: string): void { const value = tag.trim().toLowerCase();
+
+if (!value) {
+  return;
+}
+
+this.tags.add(value);
+this.touch();
+
+}
+
+public removeTag(tag: string): void { if (this.tags.delete(tag.trim().toLowerCase())) { this.touch(); } }
+
+public getTags(): readonly string[] { return Array.from(this.tags.values()).sort(); }
+
+public incrementMessageCount(): void { this.messageCount += 1; this.lastMessageAt = Date.now(); this.touch(); }
+
+public decrementMessageCount(): void { if (this.messageCount > 0) { this.messageCount -= 1; this.touch(); } }
+
+public pin(): void { if (!this.pinned) { this.pinned = true; this.touch(); } }
+
+public unpin(): void { if (this.pinned) { this.pinned = false; this.touch(); } }
+
+public archive(): void { if (!this.archived) { this.archived = true; this.touch(); } }
+
+public restore(): void { if (this.archived) { this.archived = false; this.touch(); } }
+
+public export(): ConversationMetadataSnapshot { return { id: this.id, sessionId: this.sessionId, title: this.title, summary: this.summary, tags: this.getTags(), createdAt: this.createdAt, updatedAt: this.updatedAt, lastMessageAt: this.lastMessageAt, archived: this.archived, pinned: this.pinned, messageCount: this.messageCount, }; }
+
+private touch(): void { this.updatedAt = Date.now(); } } === END_FILE ===
+
+=== START_FILE: src/services/ai/MessageQueue.ts === import { EventEmitter } from 'events';
+
+export type QueueItemStatus = | 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled';
+
+export interface QueueItem<T = unknown> { readonly id: string; readonly payload: T; readonly priority: number; readonly createdAt: number; status: QueueItemStatus; attempts: number; lastError?: Error; }
+
+export interface MessageQueueOptions { readonly maxRetries?: number; readonly autoStart?: boolean; }
+
+export type QueueProcessor<T> = (item: QueueItem<T>) => Promise<void>;
+
+export class MessageQueue<T = unknown> extends EventEmitter { private readonly queue: QueueItem<T>[] = []; private readonly maxRetries: number;
+
+private processor: QueueProcessor<T> | null = null; private processing = false; private paused = false;
+
+constructor(options: MessageQueueOptions = {}) { super();
+
+this.maxRetries = options.maxRetries ?? 3;
+
+if (options.autoStart ?? true) {
+  queueMicrotask(() => void this.process());
+}
+
+}
+
+public setProcessor(processor: QueueProcessor<T>): void { this.processor = processor; }
+
+public enqueue( payload: T, priority = 0, id = crypto.randomUUID(), ): QueueItem<T> { const item: QueueItem<T> = { id, payload, priority, createdAt: Date.now(), status: 'queued', attempts: 0, };
+
+this.queue.push(item);
+this.queue.sort((a, b) => b.priority - a.priority);
+
+this.emit('enqueue', item);
+
+void this.process();
+
+return item;
+
+}
+
+public pause(): void { this.paused = true; }
+
+public resume(): void { if (!this.paused) { return; }
+
+this.paused = false;
+void this.process();
+
+}
+
+public clear(): void { this.queue.length = 0; }
+
+public size(): number { return this.queue.length; }
+
+public isProcessing(): boolean { return this.processing; }
+
+public snapshot(): readonly QueueItem<T>[] { return [...this.queue]; }
+
+private async process(): Promise<void> { if (this.processing || this.paused || !this.processor) { return; }
+
+this.processing = true;
+
+try {
+  while (!this.paused && this.queue.length > 0) {
+    const item = this.queue.shift()!;
+
+    item.status = 'processing';
+    item.attempts++;
+
+    this.emit('processing', item);
+
+    try {
+      await this.processor(item);
+
+      item.status = 'completed';
+
+      this.emit('completed', item);
+    } catch (error) {
+      item.lastError =
+        error instanceof Error ? error : new Error(String(error));
+
+      if (item.attempts < this.maxRetries) {
+        item.status = 'queued';
+        this.queue.unshift(item);
+
+        this.emit('retry', item);
+      } else {
+        item.status = 'failed';
+
+        this.emit('failed', item);
+      }
+    }
+  }
+} finally {
+  this.processing = false;
+}
+
+} } === END_FILE ===
+
+=== START_FILE: src/services/ai/StreamingController.ts ===
+import { EventEmitter } from 'events';
+import Logger from '../../utils/Logger';
+export interface StreamChunkPayload {
+messageId: string;
+text: string;
+timestamp: number;
+}
+export interface StreamState {
+messageId: string;
+isActive: boolean;
+chunkCount: number;
+startedAt: number;
+}
+export class StreamingController extends EventEmitter {
+private activeStreams: Map<string, StreamState> = new Map();
+/**
+Registers and initializes a new streaming context for a generation task.
+*/
+public registerStream(messageId: string): void {
+if (this.activeStreams.has(messageId)) {
+Logger.warn(Stream context for message "${messageId}" already exists. Re-initializing.);
+}
+const state: StreamState = {
+messageId,
+isActive: true,
+chunkCount: 0,
+startedAt: Date.now(),
+};
+this.activeStreams.set(messageId, state);
+this.emit('stream:start', messageId);
+Logger.info(Streaming context registered for message: ${messageId});
+}
+/**
+Pushes a raw text token/chunk into the stream pipeline and notifies consumers.
+*/
+public pushChunk(messageId: string, text: string): void {
+const state = this.activeStreams.get(messageId);
+if (!state) {
+Logger.warn(Received chunk for unregistered or inactive stream: ${messageId});
+return;
+}
+if (!state.isActive) {
+Logger.warn(Stream for message "${messageId}" is already closed. Dropping chunk.);
+return;
+}
+state.chunkCount++;
+const payload: StreamChunkPayload = {
+messageId,
+text,
+timestamp: Date.now(),
+};
+this.emit('stream:chunk', payload);
+}
+/**
+Finalizes a stream session successfully, sealing its state.
+*/
+public closeStream(messageId: string): void {
+const state = this.activeStreams.get(messageId);
+if (!state) {
+Logger.error(Cannot close stream. Context not found for message: ${messageId});
+return;
+}
+state.isActive = false;
+const duration = Date.now() - state.startedAt;
+this.emit('stream:end', {
+messageId,
+totalChunks: state.chunkCount,
+durationMs: duration,
+});
+this.activeStreams.delete(messageId);
+Logger.info(Stream context safely closed for message: ${messageId} (${state.chunkCount} chunks, ${duration}ms));
+}
+/**
+Aborts an active stream due to failure or manual user cancellation.
+*/
+public abortStream(messageId: string, reason?: string): void {
+const state = this.activeStreams.get(messageId);
+if (!state) {
+return;
+}
+state.isActive = false;
+this.emit('stream:abort', { messageId, reason: reason ?? 'Manual abort requested' });
+this.activeStreams.delete(messageId);
+Logger.warn(Stream interrupted and purged for message: ${messageId}. Reason: ${reason ?? 'None provided'});
+}
+/**
+Operational check to see if a specific message stream is processing.
+*/
+public isStreaming(messageId: string): boolean {
+const state = this.activeStreams.get(messageId);
+return state ? state.isActive : false;
+}
+/**
+Returns a list of all currently active streaming IDs.
+*/
+public getActiveStreamIds(): string[] {
+return Array.from(this.activeStreams.keys());
+}
+/**
+Resets the entire controller state layer, clearing internal tracking caches.
+*/
+public clear(): void {
+for (const messageId of this.activeStreams.keys()) {
+this.abortStream(messageId, 'Controller reset sequence triggered');
+}
+this.activeStreams.clear();
+this.removeAllListeners();
+Logger.info('StreamingController completely purged and reset.');
+}
+}
+export default new StreamingController();
+=== END_FILE ===
+
+
+=== START_FILE: src/services/ai/ConversationManager.ts ===
+import { Conversation } from './Conversation';
+import { Session } from './Session';
+import { ConversationMetadata } from './ConversationMetadata';
+import { MessageQueue, Queueltem } from './MessageQueue';
+import TokenCounter from '../../utils/TokenCounter';
+import Logger from '../../utils/Logger';
+export interface GenerationTask {
+conversationId: string;
+userMessage: string;
+systemPromptOverride?: string;
+}
+export class ConversationManager {
+private activeSession: Session | null = null;
+private metadataRegistry: Map<string, ConversationMetadata> = new Map();
+private executionQueue: MessageQueue<GenerationTask>;
+private isInitialized = false;
+constructor(maxRetries = 2) {
+this.executionQueue = new MessageQueue<GenerationTask>({
+maxRetries,
+autoStart: true,
+});
+}
+/**
+Initializes the manager with an active runtime session, syncing metadata.
+*/
+public initialize(session: Session): void {
+this.activeSession = session;
+this.metadataRegistry.clear();
+// Reconstruct structural metadata representations for active tracking
+for (const conversation of session.getConversations()) {
+const metadata = new ConversationMetadata(
+session.getId(),
+conversation.getTitle(),
+conversation.getId()
+);
+this.metadataRegistry.set(conversation.getId(), metadata);
+}
+this.isInitialized = true;
+Logger.info(ConversationManager fully orchestrated for session: ${session.getId()});
+}
+/**
+Submits a user message context to a conversation, tracking state and queue mechanics.
+*/
+public async submitPrompt(conversationId: string, text: string, priority = 0): Promise<string> {
+this.ensureInitialized();
+if (!this.activeSession || !this.activeSession.hasConversation(conversationId)) {
+throw new Error(Target conversation context "${conversationId}" does not exist in the active session.);
+}
+const conversation = this.activeSession.getConversation(conversationId);
+const metadata = this.metadataRegistry.get(conversationId);
+// 1. Immediately log the structural user message to local state for UX responsiveness
+const rawTokens = TokenCounter.estimateTokens(text);
+conversation.append('user', text, rawTokens);
+if (metadata) {
+metadata.incrementMessageCount();
+}
+// 2. Wrap transaction and slide into execution queue pipeline
+const task: GenerationTask = {
+conversationId,
+userMessage: text,
+};
+const queueItem = this.executionQueue.enqueue(task, priority);
+Logger.debug(Prompt submitted and queued. Task ID: ${queueItem.id}, Priority: ${priority});
+return queueItem.id;
+}
+/**
+Registers a callback handler processing the low-level queue inference tasks.
+*/
+public registerProcessor(processor: (task: GenerationTask) => Promise<void>): void {
+this.executionQueue.setProcessor(async (item: Queueltem<GenerationTask>) => {
+try {
+await processor(item.payload);
+} catch (error) {
+Logger.error(Error encountered within task execution boundary: ${item.id}, error);
+throw error;
+}
+});
+Logger.info('Inference execution processor securely bound to ConversationManager.');
+}
+/**
+Safe data accessor for conversation metadata.
+*/
+public getMetadata(conversationId: string): ConversationMetadata | null {
+return this.metadataRegistry.get(conversationId) ?? null;
+}
+/**
+Creates a brand new conversation channel inside the active running session.
+*/
+public createConversation(title?: string): Conversation {
+this.ensureInitialized();
+if (!this.activeSession) {
+throw new Error('Active session container missing during invocation.');
+}
+const conversation = this.activeSession.createConversation(title);
+const metadata = new ConversationMetadata(
+this.activeSession.getId(),
+conversation.getTitle(),
+conversation.getId()
+);
+this.metadataRegistry.set(conversation.getId(), metadata);
+Logger.info(New conversation pipeline initialized: ${conversation.getId()});
+return conversation;
+}
+/**
+Clears runtime memory caches and halts execution processing tasks.
+*/
+public terminate(): void {
+this.executionQueue.clear();
+this.metadataRegistry.clear();
+this.activeSession = null;
+this.isInitialized = false;
+Logger.warn('ConversationManager runtime structures decoupled and flushed.');
+}
+private ensureInitialized(): void {
+if (!this.isInitialized) {
+throw new Error('ConversationManager operations invoked prior to running initialization.');
+}
+}
+}
+export default new ConversationManager();
+=== END_FILE ===
+
+
+=== START_FILE: src/services/ai/RequestManager.ts ===
+import ConversationManager from './ConversationManager';
+import StreamingController from './StreamingController';
+import { ChatMessage, AIResponse } from './types';
+import Logger from '../../utils/Logger';
+export interface ExecutionRequest {
+requestId: string;
+conversationId: string;
+prompt: string;
+priority: number;
+timestamp: number;
+}
+export interface RequestCallbacks {
+onStart?: (messageId: string) => void;
+onChunk?: (chunk: string) => void;
+onComplete?: (response: AIResponse) => void;
+onError?: (error: Error) => void;
+}
+export class RequestManager {
+private activeRequests: Map<string, ExecutionRequest> = new Map();
+private requestCallbacks: Map<string, RequestCallbacks> = new Map();
+/**
+Dispatches an inbound conversation prompt through the local execution engine.
+Maps UI callbacks directly to the streaming events generated by the runtime.
+*/
+public async execute(
+conversationId: string,
+prompt: string,
+callbacks: RequestCallbacks = {},
+priority = 0
+): Promise<string> {
+const cleanPrompt = prompt.trim();
+if (!cleanPrompt) {
+throw new Error('Cannot execute an empty prompt request.');
+}
+// 1. Queue the prompt in the ConversationManager (which updates historical state instantly)
+const taskId = await ConversationManager.submitPrompt(conversationId, cleanPrompt, priority);
+const request: ExecutionRequest = {
+requestId: taskId,
+conversationId,
+prompt: cleanPrompt,
+priority,
+timestamp: Date.now(),
+};
+this.activeRequests.set(taskId, request);
+this.requestCallbacks.set(taskId, callbacks);
+Logger.info(Execution request mapped successfully. Request ID: ${taskId});
+// 2. Bind the transactional processor to structural stream hooks if this is the first execution
+this.ensureProcessorBound();
+return taskId;
+}
+/**
+Lazily binds the single-instance queue worker to run inference against the AI Provider.
+*/
+private ensureProcessorBound(): void {
+ConversationManager.registerProcessor(async (task) => {
+// Find the tracking request associated with this queue execution block
+const targetRequest = Array.from(this.activeRequests.values()).find(
+(req) => req.conversationId === task.conversationId && req.prompt === task.userMessage
+);
+if (!targetRequest) {
+Logger.warn(Orphaned background generation task detected for conversation: ${task.conversationId});
+return;
+}
+const requestId = targetRequest.requestId;
+const callbacks = this.requestCallbacks.get(requestId);
+// Create event listeners to catch tokens coming from the StreamingController
+const handleStart = (msgId: string) => {
+if (callbacks?.onStart) callbacks.onStart(msgId);
+};
+const handleChunk = (payload: { messageId: string; text: string }) => {
+if (callbacks?.onChunk) callbacks.onChunk(payload.text);
+};
+const handleEnd = (payload: { messageId: string }) => {
+this.cleanupRequest(requestId, handleStart, handleChunk, handleEnd, handleAbort);
+};
+const handleAbort = (payload: { messageId: string; reason: string }) => {
+if (callbacks?.onError) {
+callbacks.onError(new Error(Stream generation aborted: ${payload.reason}));
+}
+this.cleanupRequest(requestId, handleStart, handleChunk, handleEnd, handleAbort);
+};
+// Subscribe to active stream updates
+StreamingController.on('stream:start', handleStart);
+StreamingController.on('stream:chunk', handleChunk);
+StreamingController.on('stream:end', handleEnd);
+StreamingController.on('stream:abort', handleAbort);
+});
+}
+/**
+Explicitly unbinds listeners and evicts tracking entities upon stream termination.
+*/
+private cleanupRequest(
+requestId: string,
+startFn: Function,
+chunkFn: Function,
+endFn: Function,
+abortFn: Function
+): void {
+StreamingController.off('stream:start', startFn as any);
+StreamingController.off('stream:chunk', chunkFn as any);
+StreamingController.off('stream:end', endFn as any);
+StreamingController.off('stream:abort', abortFn as any);
+this.activeRequests.delete(requestId);
+this.requestCallbacks.delete(requestId);
+Logger.debug(Request resources released safely for ID: ${requestId});
+}
+/**
+Forces the immediate cancellation of a running request transaction.
+*/
+public cancelRequest(requestId: string): boolean {
+const request = this.activeRequests.get(requestId);
+if (!request) {
+return false;
+}
+StreamingController.abortStream(requestId, 'User requested manual cancellation.');
+this.activeRequests.delete(requestId);
+this.requestCallbacks.delete(requestId);
+return true;
+}
+/**
+System health diagnostic providing total size of processing traffic.
+*/
+public getPendingCount(): number {
+return this.activeRequests.size;
+}
+}
+export default new RequestManager();
+=== END_FILE ===
+
+
+=== START_FILE: src/services/ai/ResponsePipeline.ts ===
+import { AIResponse, TokenUsage } from './types';
+import TokenCounter from '../../utils/TokenCounter';
+import Logger from '../../utils/Logger';
+export interface PipelineContext {
+promptText: string;
+completionText: string;
+finishReason: "stop" | "length" | "cancelled" | "error";
+modelName: string;
+executionTimeMs: number;
+}
+export class ResponsePipeline {
+private stopSequences: string[] = ["</s>", "<|im_end|>", "<|endoftext|>"];
+/**
+Processes raw text output from an inference cycle, sanitizing and generating usage metrics.
+*/
+public process(context: PipelineContext): AIResponse {
+Logger.info(Processing raw response pipeline execution for model: ${context.modelName});
+// 1. Sanitize text by stripping trailing or leading whitespace and common token boundaries
+const sanitizedText = this.sanitizeText(context.completionText);
+// 2. Extrapolate and build exact usage metrics for tracking
+const usage = this.calculateUsage(context.promptText, sanitizedText);
+// 3. Frame structural production response object
+const response: AIResponse = {
+id: resp_${Date.now()}_${Math.random().toString(36).substring(2, 9)},
+text: sanitizedText,
+usage,
+finishReason: context.finishReason,
+};
+Logger.debug(Response Pipeline processing completed. Total tokens: ${usage.total});
+return response;
+}
+/**
+Cleanses raw textual fragments from internal engine stop structures.
+*/
+private sanitizeText(rawText: string): string {
+let cleanText = rawText;
+for (const sequence of this.stopSequences) {
+if (cleanText.endsWith(sequence)) {
+cleanText = cleanText.slice(0, -sequence.length);
+}
+}
+return cleanText.trim();
+}
+/**
+Synthesizes prompt and completion vectors into a concrete TokenUsage breakdown.
+*/
+private calculateUsage(prompt: string, completion: string): TokenUsage {
+return TokenCounter.buildUsage(prompt, completion);
+}
+/**
+Extends the default stop sequence dictionary with runtime overrides.
+*/
+public registerStopSequences(sequences: string[]): void {
+const uniqueSequences = new Set([...this.stopSequences, ...sequences]);
+this.stopSequences = Array.from(uniqueSequences);
+Logger.debug(Response Pipeline stop sequences synchronized. Current registry size: ${this.stopSequences.length});
+}
+}
+export default new ResponsePipeline();
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/ContextCompressor.ts ===
+import { ChatMessage } from './types';
+import TokenCounter from '../../utils/TokenCounter';
+import Logger from '../../utils/Logger';
+export interface CompressorOptions {
+maxAllowedTokens: number;
+preserveSystemPrompt: boolean;
+compressionRatio: number; // Percentage of context to drop when overflowing (e.g., 0.2 = 20%)
+}
+export class ContextCompressor {
+private defaultOptions: CompressorOptions = {
+maxAllowedTokens: 3000, // Safe headroom budget below hard 4096 context size
+preserveSystemPrompt: true,
+compressionRatio: 0.25,
+};
+/**
+Evaluates historical conversation matrices and compresses content if token limits are breached.
+*/
+public compress(messages: ChatMessage[], options?: Partial<CompressorOptions>): ChatMessage[] {
+const config = { ...this.defaultOptions, ...options };
+// 1. Calculate total current token footprint across the history array
+let totalTokens = 0;
+const messageTokenMap = messages.map(msg => {
+const tokens = TokenCounter.estimateTokens(msg.content);
+totalTokens += tokens;
+return { msg, tokens };
+});
+Logger.info(ContextCompressor: Evaluating message array. Current estimated token footprint: ${totalTokens}/${config.maxAllowedTokens});
+if (totalTokens <= config.maxAllowedTokens) {
+return messages;
+}
+Logger.warn(Context window threshold breached (${totalTokens} tokens). Commencing historical compression pipeline.);
+// 2. Isolate immutable system anchors from standard conversational buffers
+const systemMessages: ChatMessage[] = [];
+let processingPool = [...messageTokenMap];
+if (config.preserveSystemPrompt) {
+systemMessages.push(...messages.filter(m => m.role === 'system'));
+processingPool = processingPool.filter(item => item.msg.role !== 'system');
+}
+// 3. Systematically prune chronological records from the oldest indices until we sit safely below target bounds
+let reductionTarget = totalTokens - config.maxAllowedTokens;
+let prunedTokens = 0;
+let shiftIndex = 0;
+while (prunedTokens < reductionTarget && shiftIndex < processingPool.length) {
+// Retain the newest turn sequence if we're hitting a critical floor to avoid absolute amnesia
+if (processingPool.length - shiftIndex <= 2) {
+Logger.warn('Context Compressor reached critical conversation horizon boundary. Halting truncation sequence.');
+break;
+}
+prunedTokens += processingPool[shiftIndex].tokens;
+shiftIndex++;
+}
+const compressedContext = [
+...systemMessages,
+...processingPool.slice(shiftIndex).map(item => item.msg)
+];
+const finalTokens = compressedContext.reduce((acc, current) => acc + TokenCounter.estimateTokens(current.content), 0);
+Logger.info(Compression cycle completed successfully. Pruned ${shiftIndex} historical messages. New footprint: ${finalTokens} tokens.);
+return compressedContext;
+}
+/**
+Inject a structural summaries milestone marker directly into the history layer.
+Used when long-term memory aggregation replaces raw historic conversation indexes.
+*/
+public injectSummaryMarker(history: ChatMessage[], summaryText: string): ChatMessage[] {
+const systemPrompt = history.find(m => m.role === 'system');
+const userAndAssistantHistory = history.filter(m => m.role !== 'system');
+const summaryMessage: ChatMessage = {
+id: summary_${Date.now()},
+role: 'system',
+content: [CONTEXT SUMMARY: ${summaryText}],
+createdAt: Date.now()
+};
+return systemPrompt
+? [systemPrompt, summaryMessage, ...userAndAssistantHistory]
+: [summaryMessage, ...userAndAssistantHistory];
+}
+}
+export default new ContextCompressor();
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/ChatRepository.ts ===
+import RNFS from 'react-native-fs';
+import { ConversationSnapshot } from './Conversation';
+import { SessionSnapshot } from './Session';
+import { ConversationMetadataSnapshot } from './ConversationMetadata';
+import Logger from '../../utils/Logger';
+export interface ChatStoragePayload {
+sessions: Record<string, SessionSnapshot>;
+conversations: Record<string, ConversationSnapshot>;
+metadata: Record<string, ConversationMetadataSnapshot>;
+}
+export class ChatRepository {
+private readonly storageDirectory: string;
+private readonly databasePath: string;
+private cache: ChatStoragePayload = {
+sessions: {},
+conversations: {},
+metadata: {},
+};
+constructor() {
+// Persisting data within internal application document sandbox directories
+this.storageDirectory = ${RNFS.DocumentDirectoryPath}/Evolva/db;
+this.databasePath = ${this.storageDirectory}/chat_store.json;
+}
+/**
+Initializes target storage directories and hydrates state caches from local disk.
+*/
+public async initialize(): Promise<void> {
+try {
+const dirExists = await RNFS.exists(this.storageDirectory);
+if (!dirExists) {
+await RNFS.mkdir(this.storageDirectory);
+Logger.info(Created secure storage architecture path: ${this.storageDirectory});
+}
+const fileExists = await RNFS.exists(this.databasePath);
+if (fileExists) {
+const rawContent = await RNFS.readFile(this.databasePath, 'utf8');
+this.cache = JSON.parse(rawContent) as ChatStoragePayload;
+Logger.info(Hydrated ChatRepository cache successfully from disk store.);
+} else {
+await this.flushToDisk();
+Logger.info(Initialized empty state storage manifest file.);
+}
+} catch (error) {
+Logger.error(Critical failure during ChatRepository initialization pipeline, error);
+throw error;
+}
+}
+/**
+Commits an active session snapshot and all corresponding internal assets to disk.
+*/
+public async saveSession(
+session: SessionSnapshot,
+conversations: ConversationSnapshot[],
+metadataList: ConversationMetadataSnapshot[]
+): Promise<void> {
+this.cache.sessions[session.id] = session;
+for (const conv of conversations) {
+this.cache.conversations[conv.id] = conv;
+}
+for (const meta of metadataList) {
+this.cache.metadata[meta.id] = meta;
+}
+await this.flushToDisk();
+Logger.debug(Persistent updates committed successfully for Session: ${session.id});
+}
+/**
+Retrieves a previously archived session composition context map from local files.
+*/
+public getSessionData(sessionId: string): {
+session: SessionSnapshot | null;
+conversations: ConversationSnapshot[];
+metadata: ConversationMetadataSnapshot[];
+} {
+const session = this.cache.sessions[sessionId] || null;
+if (!session) {
+return { session: null, conversations: [], metadata: [] };
+}
+const conversations = session.conversationIds
+.map(id => this.cache.conversations[id])
+.filter(Boolean);
+const metadata = session.conversationIds
+.map(id => this.cache.metadata[id])
+.filter(Boolean);
+return { session, conversations, metadata };
+}
+/**
+Performs an indexed text search queries cross-cutting conversation histories.
+*/
+public searchMessages(query: string): Array<{ conversationId: string; title: string; matchText: string }> {
+const cleanQuery = query.toLowerCase().trim();
+if (!cleanQuery) return [];
+const matches: Array<{ conversationId: string; title: string; matchText: string }> = [];
+for (const [convId, snapshot] of Object.entries(this.cache.conversations)) {
+const meta = this.cache.metadata[convId];
+const title = meta ? meta.title : snapshot.title;
+for (const msg of snapshot.messages) {
+if (msg.content.toLowerCase().includes(cleanQuery)) {
+matches.push({
+conversationId: convId,
+title,
+matchText: msg.content,
+});
+}
+}
+}
+return matches;
+}
+/**
+Gathers all metadata objects matching filtering parameters (e.g. pinned/archived tracking).
+*/
+public getMetadataIndex(filter?: { pinned?: boolean; archived?: boolean }): ConversationMetadataSnapshot[] {
+let indices = Object.values(this.cache.metadata);
+if (filter) {
+if (filter.pinned !== undefined) {
+indices = indices.filter(m => m.pinned === filter.pinned);
+}
+if (filter.archived !== undefined) {
+indices = indices.filter(m => m.archived === filter.archived);
+}
+}
+return indices.sort((a, b) => (b.lastMessageAt || b.updatedAt) - (a.lastMessageAt || a.updatedAt));
+}
+/**
+Evicts a target conversation structure completely from persistent collections.
+*/
+public async deleteConversation(sessionId: string, conversationId: string): Promise<void> {
+const session = this.cache.sessions[sessionId];
+if (session) {
+this.cache.sessions[sessionId] = {
+...session,
+conversationIds: session.conversationIds.filter(id => id !== conversationId),
+};
+}
+delete this.cache.conversations[conversationId];
+delete this.cache.metadata[conversationId];
+await this.flushToDisk();
+Logger.warn(Conversation payload completely purged from storage index: ${conversationId});
+}
+/**
+Internal routine coordinating JSON string writing down to storage partitions.
+*/
+private async flushToDisk(): Promise<void> {
+try {
+const payloadString = JSON.stringify(this.cache, null, 2);
+await RNFS.writeFile(this.databasePath, payloadString, 'utf8');
+} catch (error) {
+Logger.error(Failed executing transaction serialization flush to system storage disk, error);
+throw error;
+}
+}
+}
+export default new ChatRepository();
+=== END_FILE ===
+
+
+=== START_FILE: src/services/ai/TypingEngine.ts ===
+import { EventEmitter } from 'events';
+import StreamingController, { StreamChunkPayload } from './StreamingController';
+import RequestManager, { RequestCallbacks } from './RequestManager';
+import ConversationManager from './ConversationManager';
+import { AIResponse } from './types';
+import Logger from '../../utils/Logger';
+export type TypingStatus = 'idle' | 'typing' | 'cancelled' | 'error';
+export interface TypingState {
+conversationId: string;
+messageId: string | null;
+status: TypingStatus;
+accumulatedText: string;
+lastUpdated: number;
+}
+export class TypingEngine extends EventEmitter {
+private activeStates: Map<string, TypingState> = new Map();
+private retryTracker: Map<string, { lastPrompt: string; attemptCount: number }> = new Map();
+constructor() {
+super();
+this.initializeListeners();
+}
+/**
+Internal routine binding the engine directly to the active low-level StreamingController events.
+*/
+private initializeListeners(): void {
+StreamingController.on('stream:start', (messageId: string) => {
+const state = this.findStateByMessageId(messageId);
+if (state) {
+state.status = 'typing';
+state.lastUpdated = Date.now();
+this.emit('typing:start', state);
+}
+});
+StreamingController.on('stream:chunk', (payload: StreamChunkPayload) => {
+const state = this.findStateByMessageId(payload.messageId);
+if (state && state.status === 'typing') {
+state.accumulatedText += payload.text;
+state.lastUpdated = Date.now();
+this.emit('typing:delta', state);
+}
+});
+StreamingController.on('stream:end', (payload: { messageId: string }) => {
+const state = this.findStateByMessageId(payload.messageId);
+if (state) {
+state.status = 'idle';
+state.lastUpdated = Date.now();
+this.emit('typing:end', state);
+this.activeStates.delete(state.conversationId);
+}
+});
+StreamingController.on('stream:abort', (payload: { messageId: string; reason: string }) => {
+const state = this.findStateByMessageId(payload.messageId);
+if (state) {
+state.status = state.status === 'cancelled' ? 'cancelled' : 'error';
+state.lastUpdated = Date.now();
+this.emit('typing:fault', { state, reason: payload.reason });
+this.activeStates.delete(state.conversationId);
+}
+});
+}
+/**
+Initializes a guided streaming prompt interaction tracking sequence.
+*/
+public async dispatchPrompt(conversationId: string, prompt: string): Promise<string> {
+if (this.isConversationTyping(conversationId)) {
+throw new Error(Conversation channel "${conversationId}" is currently busy generating another text frame.);
+}
+// Cache context execution values to enable accurate localized retries down the line
+this.retryTracker.set(conversationId, {
+lastPrompt: prompt,
+attemptCount: 0
+});
+const state: TypingState = {
+conversationId,
+messageId: null,
+status: 'idle',
+accumulatedText: '',
+lastUpdated: Date.now()
+};
+this.activeStates.set(conversationId, state);
+const callbacks: RequestCallbacks = {
+onStart: (msgId: string) => {
+state.messageId = msgId;
+},
+onError: (err: Error) => {
+Logger.error(TypingEngine encountered runtime generation boundary failure, err);
+}
+};
+return await RequestManager.execute(conversationId, prompt, callbacks);
+}
+/**
+Triggers a manual interruption context across the underlying inference loops.
+*/
+public stopGeneration(conversationId: string): boolean {
+const state = this.activeStates.get(conversationId);
+if (!state || !state.messageId) {
+return false;
+}
+state.status = 'cancelled';
+const result = RequestManager.cancelRequest(state.messageId);
+if (result) {
+Logger.warn(Typing Engine actively intercepted and forced execution step down on conversation: ${conversationId});
+}
+return result;
+}
+/**
+Re-executes the last prompt run inside a conversation container, handling automatic rollback.
+*/
+public async retryLastPrompt(conversationId: string): Promise<string> {
+const historicalRun = this.retryTracker.get(conversationId);
+if (!historicalRun) {
+throw new Error(No historical dispatch footprints tracked for conversation: ${conversationId});
+}
+historicalRun.attemptCount++;
+Logger.info(Re-triggering text processing prompt run. Attempt: ${historicalRun.attemptCount});
+// If an interaction is currently processing, cleanly sever context strings first
+this.stopGeneration(conversationId);
+return await this.dispatchPrompt(conversationId, historicalRun.lastPrompt);
+}
+/**
+State check validating if a designated conversation is actively processing textual streams.
+*/
+public isConversationTyping(conversationId: string): boolean {
+const state = this.activeStates.get(conversationId);
+return state ? state.status === 'typing' : false;
+}
+/**
+Pulls the reactive state vector cache assigned to an active conversation context.
+*/
+public getTypingState(conversationId: string): TypingState | null {
+return this.activeStates.get(conversationId) ?? null;
+}
+private findStateByMessageId(messageId: string): TypingState | undefined {
+return Array.from(this.activeStates.values()).find(s => s.messageId === messageId);
+}
+}
+export default new TypingEngine();
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/ConversationRecovery.ts ===
+import ChatRepository from './ChatRepository';
+import ConversationManager from './ConversationManager';
+import { Session, SessionSnapshot } from './Session';
+import { Conversation } from './Conversation';
+import { ConversationMetadata } from './ConversationMetadata';
+import Logger from '../../utils/Logger';
+export interface ConversationAnalyticsReport {
+conversationId: string;
+totalMessages: number;
+userMessageCount: number;
+assistantMessageCount: number;
+estimatedPromptTokens: number;
+estimatedCompletionTokens: number;
+estimatedTotalTokens: number;
+sessionLifespanMs: number;
+}
+export class ConversationRecovery {
+/**
+Restores a saved session state from the database file and hydrates the active ConversationManager.
+*/
+public async restoreSession(sessionId: string): Promise<Session | null> {
+Logger.info(Initiating session restoration sequence for ID: ${sessionId});
+try {
+const complexPayload = ChatRepository.getSessionData(sessionId);
+if (!complexPayload.session) {
+Logger.warn(No historical records found on disk for session: ${sessionId});
+return null;
+}
+// 1. Reconstruct the base core Session object instance
+const session = new Session(complexPayload.session.id);
+// 2. Hydrate and rebuild individual conversations matching structural history snapshots
+for (const convSnapshot of complexPayload.conversations) {
+const conversation = new Conversation(convSnapshot.title, convSnapshot.id);
+// Append all historically recorded messages back into structural class arrays
+for (const msg of convSnapshot.messages) {
+conversation.append(
+msg.role,
+msg.content,
+msg.tokenCount,
+msg.metadata as Record<string, unknown>
+);
+}
+session.addConversation(conversation);
+}
+// 3. Set the preserved active conversation index pointer if it exists
+if (complexPayload.session.activeConversationId) {
+session.setActiveConversation(complexPayload.session.activeConversationId);
+}
+// 4. Pass control off to the manager runtime layer to orchestrate live instances
+ConversationManager.initialize(session);
+Logger.info(Session ${sessionId} successfully restored and bound to runtime memory.);
+return session;
+} catch (error) {
+Logger.error(Failed executing disaster-recovery session restoration sequence, error);
+throw error;
+}
+}
+/**
+serializes an isolated conversation context into a transportable string asset payload.
+*/
+public exportConversation(sessionId: string, conversationId: string): string {
+const dataContext = ChatRepository.getSessionData(sessionId);
+const targetSnapshot = dataContext.conversations.find(c => c.id === conversationId);
+if (!targetSnapshot) {
+throw new Error(Target conversation context "${conversationId}" missing from archive package.);
+}
+const exportBundle = {
+version: "Evolva_Export_v1",
+exportedAt: Date.now(),
+payload: targetSnapshot
+};
+return JSON.stringify(exportBundle, null, 2);
+}
+/**
+Compiles diagnostic performance metrics across historical structural conversation logs.
+*/
+public computeAnalytics(sessionId: string, conversationId: string): ConversationAnalyticsReport {
+const dataContext = ChatRepository.getSessionData(sessionId);
+const snapshot = dataContext.conversations.find(c => c.id === conversationId);
+if (!snapshot) {
+throw new Error(Analytics evaluation failed. Conversation reference missing for: ${conversationId});
+}
+const totalMessages = snapshot.messages.length;
+const userMessageCount = snapshot.messages.filter(m => m.role === 'user').length;
+const assistantMessageCount = snapshot.messages.filter(m => m.role === 'assistant').length;
+const sessionLifespanMs = totalMessages > 1
+? snapshot.messages[totalMessages - 1].createdAt - snapshot.messages[0].createdAt
+: 0;
+return {
+conversationId,
+totalMessages,
+userMessageCount,
+assistantMessageCount,
+estimatedPromptTokens: snapshot.promptTokens,
+estimatedCompletionTokens: snapshot.completionTokens,
+estimatedTotalTokens: snapshot.totalTokens,
+sessionLifespanMs
+};
+}
+/**
+Force executes a critical point-in-time recovery freeze checkpoint out onto persistent sectors.
+*/
+public async emergencyCheckpointSave(session: Session): Promise<void> {
+Logger.warn(Executing automatic emergency recovery checkpoint serialization save for session: ${session.getId()});
+const sessionSnapshot = session.export();
+const conversations = session.getConversations().map(c => c.export());
+const metadataList = session.getConversations().map(c => {
+return ConversationManager.getMetadata(c.getId())?.export() || {
+id: c.getId(),
+sessionId: session.getId(),
+title: c.getTitle(),
+summary: "",
+tags: [],
+createdAt: sessionSnapshot.createdAt,
+updatedAt: Date.now(),
+lastMessageAt: Date.now(),
+archived: false,
+pinned: false,
+messageCount: c.getMessages().length
+};
+});
+await ChatRepository.saveSession(sessionSnapshot, conversations, metadataList);
+}
+}
+export default new ConversationRecovery();
+=== END_FILE ===
+
+
+=== START_FILE: src/services/insights/InsightsEngine.ts ===
+import IdentityEngine, { PsychologicalProfile } from '../identity/IdentityEngine';
+import GoalEngine, { SystemProject } from '../goals/GoalEngine';
+import ReflectionEngine, { ReflectionPeriod, CognitiveInsight } from '../reflection/ReflectionEngine';
+import Logger from '../../utils/Logger';
+export interface InsightCard {
+id: string;
+type: 'productivity_velocity' | 'habit_decay' | 'cognitive_friction' | 'strategic_recommendation';
+title: string;
+description: string;
+impactScore: number;       // Quantitative metric of importance: [1 - 10]
+confidenceInterval: number; // Statistical variance value: [0.0 - 1.0]
+actionableStep: string;
+generatedAt: number;
+}
+export interface IntelligenceDashboardSnapshot {
+productivityVelocityEMA: number;
+habitStabilityIndex: number;
+cognitiveFrictionRatio: number;
+activeInsightCards: InsightCard[];
+}
+export class InsightsEngine {
+private dynamicInsightCards: InsightCard[] = [];
+private readonly lookbackWindowMs = 7 * 24 * 60 * 60 * 1000; // 7-day trailing lookback matrix
+/**
+Compiles high-dimensional analytics across system engines to produce predictive insight vectors.
+*/
+public generateIntelligenceDashboard(): IntelligenceDashboardSnapshot {
+Logger.info('InsightsEngine: Commencing advanced multi-engine intelligence compilation sequence.');
+const startTime = Date.now();
+// 1. Extract structural data dependencies from sibling engines
+const identityProfile = IdentityEngine.getProfile();
+const activeProjects = GoalEngine.listActiveProjects();
+const reflectionPeriod = ReflectionEngine.compileReflectionReview(this.lookbackWindowMs);
+// 2. Compute mathematical moving averages and friction metrics
+const productivityVelocityEMA = this.computeProductivityVelocityEMA(activeProjects);
+const habitStabilityIndex = this.computeHabitStabilityIndex(identityProfile);
+const cognitiveFrictionRatio = this.computeCognitiveFrictionRatio(reflectionPeriod);
+// 3. Purge stale matrix records and generate highly advanced Insight Cards
+this.dynamicInsightCards = [];
+this.synthesizeProductivityInsights(productivityVelocityEMA, activeProjects);
+this.synthesizeHabitInsights(habitStabilityIndex, identityProfile);
+this.synthesizeCognitiveInsights(cognitiveFrictionRatio, reflectionPeriod);
+const executionDuration = Date.now() - startTime;
+Logger.info(InsightsEngine: Intelligence compilation completed successfully in ${executionDuration}ms.);
+return {
+productivityVelocityEMA,
+habitStabilityIndex,
+cognitiveFrictionRatio,
+activeInsightCards: this.dynamicInsightCards
+};
+}
+/**
+Calculates structural project completion trends using an Exponential Moving Average algorithm.
+*/
+private computeProductivityVelocityEMA(projects: SystemProject[]): number {
+if (projects.length === 0) return 0.0;
+let totalVelocity = 0.0;
+const smoothingFactor = 0.3; // Alpha parameter for internal smoothing math
+for (const project of projects) {
+const progress = GoalEngine.calculateProgressRatio(project.id);
+const projectAgeDays = Math.max(1, (Date.now() - project.createdAt) / (24 * 60 * 60 * 1000));
+// Velocity Vector = Progress Delta / Timeline Elapsed
+const instantaneousVelocity = progress / projectAgeDays;
+// Recalculate rolling mathematical progression
+totalVelocity = (instantaneousVelocity * smoothingFactor) + (totalVelocity * (1.0 - smoothingFactor));
+}
+return Number(totalVelocity.toFixed(4));
+}
+/**
+Evaluates habit tracking structures to measure identity alignment values.
+*/
+private computeHabitStabilityIndex(profile: PsychologicalProfile): number {
+const habits = Object.values(profile.habits);
+if (habits.length === 0) return 1.0;
+let aggregateConsistency = 0.0;
+for (const habit of habits) {
+aggregateConsistency += habit.consistencyScore;
+}
+return Number((aggregateConsistency / habits.length).toFixed(3));
+}
+/**
+Quantifies negative valence frequencies against regular execution cycles.
+*/
+private computeCognitiveFrictionRatio(reflection: ReflectionPeriod): number {
+const totalInsights = reflection.insights.length;
+if (totalInsights === 0) return 0.0;
+const frictionEvents = reflection.insights.filter(i => i.type === 'mistake_detected').length;
+// Scale friction factor adjusted by dominant emotional valence metrics
+const baseFriction = frictionEvents / totalInsights;
+const emotionalMultiplier = reflection.dominantEmotion.valence < 0 ? 1.2 : 0.8;
+return Number(Math.min(1.0, baseFriction * emotionalMultiplier).toFixed(3));
+}
+/**
+Evaluates productivity vectors to generate advanced planning strategy corrections.
+*/
+private synthesizeProductivityInsights(velocity: number, projects: SystemProject[]): void {
+if (velocity < 0.05 && projects.length > 0) {
+this.dynamicInsightCards.push({
+id: card_prod_${crypto.randomUUID().substring(0, 8)},
+type: 'productivity_velocity',
+title: 'Project Pipeline Stagnation Detected',
+description: 'Task progression patterns exhibit downward standard deviation scaling. Execution constraints indicate high task blockage density.',
+impactScore: 8,
+confidenceInterval: 0.92,
+actionableStep: 'Execute high-priority dependency optimization loops on top active projects to break task blockers.',
+generatedAt: Date.now()
+});
+}
+}
+/**
+Monitors dynamic shifts in habits to flag potential routines breaking down.
+*/
+private synthesizeHabitInsights(stability: number, profile: PsychologicalProfile): void {
+if (stability < 0.60) {
+this.dynamicInsightCards.push({
+id: card_habit_${crypto.randomUUID().substring(0, 8)},
+type: 'habit_decay',
+title: 'Behavioral Routine Decay Anomaly',
+description: 'Aggregate habit consistency vectors dropped below systemic safety baselines.',
+impactScore: 7,
+confidenceInterval: 0.88,
+actionableStep: 'Isolate lowest scoring habit metrics and schedule automated milestone reminders to recover target routines.',
+generatedAt: Date.now()
+});
+}
+}
+/**
+Cross-references cognitive anomalies to generate behavioral optimization loops.
+*/
+private synthesizeCognitiveInsights(friction: number, reflection: ReflectionPeriod): void {
+if (friction > 0.40) {
+const primaryMistake = reflection.insights.find(i => i.type === 'mistake_detected');
+this.dynamicInsightCards.push({
+id: card_cog_${crypto.randomUUID().substring(0, 8)},
+type: 'cognitive_friction',
+title: 'High Mental Friction Loop Discovered',
+description: 'Systemic behavioral tracking indicates recurring execution errors generating negative performance deviations.',
+impactScore: 9,
+confidenceInterval: 0.95,
+actionableStep: primaryMistake
+? Deploy a dedicated intervention protocol targeting: ${primaryMistake.description}
+: 'Initiate a systematic review of active priorities to realign workflow execution strategies.',
+generatedAt: Date.now()
+});
+}
+}
+}
+export default new InsightsEngine();
+=== END_FILE ===
+
+STAGE 5 — MEMORY RETRIEVAL (Completing Missing Integration Layers)
+=== START_FILE: src/services/memory/PromptMemoryInjector.ts ===
+import MemoryRetrieval, { RetrievalResult } from './MemoryRetrieval';
+import LocalEmbeddingModel from './LocalEmbeddingModel';
+import { ChatMessage } from '../ai/types';
+import Logger from '../../utils/Logger';
+export class PromptMemoryInjector {
+private readonly defaultTokenBudget = 1000;
+/**
+Enriches the user prompt trajectory by retrieving contextually relevant long-term memories
+and injecting them as an authenticated system context frame.
+*/
+public async injectRelevantContext(
+history: ChatMessage[],
+userMessage: string
+): Promise<ChatMessage[]> {
+Logger.info('PromptMemoryInjector: Commencing semantic context lookup for prompt injection.');
+try {
+// 1. Generate text embeddings utilizing the local transformer layer
+const report = await LocalEmbeddingModel.computeTextEmbedding(userMessage);
+// 2. Query the memory retrieval cluster using the computed tensor vector
+const relevantMatches: RetrievalResult[] = MemoryRetrieval.query(report.vectorSpace, {
+targetBitmask: 0xFFFFFF, // Search all categories
+maxResults: 8,
+similarityThreshold: 0.70
+});
+if (relevantMatches.length === 0) {
+Logger.info('PromptMemoryInjector: No semantic memory matches passed threshold criteria.');
+return history;
+}
+// 3. Compile the structural text block from the matched nodes
+const contextInjectionBlock = MemoryRetrieval.compileContextInjectionBlock(relevantMatches, this.defaultTokenBudget);
+// 4. Construct the localized context frame message
+const contextFrameMessage: ChatMessage = {
+id: mem_frame_${Date.now()},
+role: 'system',
+content: contextInjectionBlock,
+createdAt: Date.now()
+};
+// 5. Inject the frame safely directly under the main system prompt position
+const finalizedHistory = [...history];
+if (finalizedHistory.length > 0 && finalizedHistory[0].role === 'system') {
+finalizedHistory.splice(1, 0, contextFrameMessage);
+} else {
+finalizedHistory.unshift(contextFrameMessage);
+}
+Logger.info(PromptMemoryInjector: Successfully injected ${relevantMatches.length} structural memory nodes into prompt stream.);
+return finalizedHistory;
+} catch (error) {
+Logger.error('PromptMemoryInjector: Failed executing prompt injection pipeline pass.', error);
+return history;
+}
+}
+}
+export default new PromptMemoryInjector();
+=== END_FILE ===
+STAGE 6 — IDENTITY ENGINE (Completing Communication Style & Confidence Aggregators)
+=== START_FILE: src/services/identity/CommunicationProfiler.ts ===
+import MemoryRepository from '../memory/MemoryRepository';
+import { ChatMessage } from '../ai/types';
+import Logger from '../../utils/Logger';
+export interface CommunicationMetrics {
+averageSentenceLength: number;
+vocabularyComplexityScore: number;
+formalityIndex: number; // Continuum scale: [0.0 = Casual/Slang, 1.0 = Highly Technical/Formal]
+dominantToneToken: string;
+}
+export class CommunicationProfiler {
+private activeMetrics: CommunicationMetrics = {
+averageSentenceLength: 12,
+vocabularyComplexityScore: 0.5,
+formalityIndex: 0.5,
+dominantToneToken: 'neutral'
+};
+/**
+Dynamically tracks linguistic configurations across user messages to adjust AI communication style output constraints.
+*/
+public analyzeTurnStyle(history: ChatMessage[]): CommunicationMetrics {
+const userTurns = history.filter(m => m.role === 'user');
+if (userTurns.length === 0) return this.activeMetrics;
+let totalWords = 0;
+let totalSentences = 0;
+let technicalTermCount = 0;
+const technicalMarkers = ['code', 'optimize', 'compile', 'architecture', 'hardware', 'interface', 'database', 'system'];
+for (const turn of userTurns) {
+const text = turn.content.trim();
+const words = text.split(/\s+/);
+const sentences = text.split(/[.!?]+/).filter(Boolean);
+totalWords += words.length;
+totalSentences += Math.max(1, sentences.length);
+const lowercaseContent = text.toLowerCase();
+for (const marker of technicalMarkers) {
+if (lowercaseContent.includes(marker)) technicalTermCount++;
+}
+}
+const avgSentenceLength = totalWords / totalSentences;
+const computedFormality = Math.min(1.0, technicalTermCount / Math.max(1, userTurns.length * 2));
+this.activeMetrics = {
+averageSentenceLength: Number(avgSentenceLength.toFixed(2)),
+vocabularyComplexityScore: Number(Math.min(1.0, totalWords / 200).toFixed(2)),
+formalityIndex: Number(computedFormality.toFixed(2)),
+dominantToneToken: computedFormality > 0.6 ? 'technical_analytical' : 'casual_collaborative'
+};
+Logger.debug(CommunicationProfiler: Dynamic style update complete => Formality: ${this.activeMetrics.formalityIndex});
+return this.activeMetrics;
+}
+public getStyleConstraintsString(): string {
+return [AI STYLE CONSTRAINTS: Match the user's current communication footprint. Current Formality Index: ${this.activeMetrics.formalityIndex}. Mode: ${this.activeMetrics.dominantToneToken}];
+}
+}
+export default new CommunicationProfiler();
+=== END_FILE ===
+STAGE 7 — GOALS & PROJECTS (Completing Planning Engine & Predictive State Matrices)
+=== START_FILE: src/services/goals/ProjectContextEngine.ts ===
+import GoalEngine, { SystemProject, TaskStatus } from './GoalEngine';
+import Logger from '../../utils/Logger';
+export interface PredictiveGoalMetrics {
+projectedCompletionProbability: number; // Mathematical ceiling scale: [0.0 - 1.0]
+criticalPathBlockerCount: number;
+daysToTargetHorizon: number;
+}
+export class ProjectContextEngine {
+/**
+Runs prediction computations over an active task graph node topology to evaluate delivery probability parameters.
+*/
+public generatePredictiveMetrics(projectId: string): PredictiveGoalMetrics {
+const project = GoalEngine.getProject(projectId);
+if (!project || project.status !== 'active') {
+return { projectedCompletionProbability: 0.0, criticalPathBlockerCount: 0, daysToTargetHorizon: 0 };
+}
+const tasks = Array.from(project.tasks.values());
+if (tasks.length === 0) {
+return { projectedCompletionProbability: 1.0, criticalPathBlockerCount: 0, daysToTargetHorizon: 0 };
+}
+const completedCount = tasks.filter(t => t.status === 'completed').length;
+const blockedCount = tasks.filter(t => t.status === 'blocked').length;
+const failedCount = tasks.filter(t => t.status === 'failed').length;
+// Baseline calculation algorithms calculating failure states against completion velocity profiles
+let structuralProbability = (completedCount / tasks.length) * 1.0;
+if (failedCount > 0) structuralProbability -= (failedCount / tasks.length) * 0.5;
+if (blockedCount > 0) structuralProbability -= (blockedCount / tasks.length) * 0.2;
+// Enforce math parameter clipping boundaries
+const optimizedProbabilityScore = Math.min(1.0, Math.max(0.0, structuralProbability));
+Logger.info(ProjectContextEngine: Probability metrics completed for ${projectId} => Score: ${optimizedProbabilityScore});
+return {
+projectedCompletionProbability: Number(optimizedProbabilityScore.toFixed(3)),
+criticalPathBlockerCount: blockedCount,
+daysToTargetHorizon: this.calculateTargetHorizonDays(tasks)
+};
+}
+private calculateTargetHorizonDays(tasks: any[]): number {
+const now = Date.now();
+let latestDeadline = now;
+for (const task of tasks) {
+if (task.deadline && task.deadline > latestDeadline) {
+latestDeadline = task.deadline;
+}
+}
+const deltaMs = latestDeadline - now;
+return Math.ceil(deltaMs / (24 * 60 * 60 * 1000));
+}
+}
+export default new ProjectContextEngine();
+=== END_FILE ===
+
+STAGE 8 — REFLECTION ENGINE (Completing Behavior & Decision Timeline Trackers)
+=== START_FILE: src/services/reflection/DecisionTimelineTracker.ts ===
+import MemoryRepository from '../memory/MemoryRepository';
+import Logger from '../../utils/Logger';
+export interface DecisionTrace {
+id: string;
+context: string;
+alternativesConsidered: string[];
+chosenPath: string;
+rationale: string;
+impactScore: number; // Scale: [1 - 10]
+timestamp: number;
+}
+export class DecisionTimelineTracker {
+private activeTraces: Map<string, DecisionTrace> = new Map();
+/**
+Records a distinct user decision vector into the timeline registry, mapping alternatives and rationales.
+*/
+public logDecision(
+context: string,
+alternatives: string[],
+chosenPath: string,
+rationale: string,
+impactScore: number
+): DecisionTrace {
+const traceId = dec_${crypto.randomUUID().substring(0, 8)};
+const trace: DecisionTrace = {
+id: traceId,
+context: context.trim(),
+alternativesConsidered: alternatives.map(a => a.trim()),
+chosenPath: chosenPath.trim(),
+rationale: rationale.trim(),
+impactScore: Math.min(10, Math.max(1, impactScore)),
+timestamp: Date.now()
+};
+this.activeTraces.set(traceId, trace);
+Logger.info(DecisionTimelineTracker: Registered decision matrix [ID: ${traceId}]. Impact: ${impactScore});
+this.persistTraceToEnclave(trace);
+return trace;
+}
+/**
+Commits the decision trace structural text block to the secure memory repository partition.
+*/
+private persistTraceToEnclave(trace: DecisionTrace): void {
+try {
+const serializedContent = [DECISION CONTEXT]: ${trace.context} | Chosen Path: ${trace.chosenPath} | Rationale: ${trace.rationale} | Alternatives: ${trace.alternativesConsidered.join(', ')};
+MemoryRepository.commitNode({
+id: trace.id,
+bitmask: 1 << 5, // Reflection Bitmask
+content: serializedContent,
+importance: trace.impactScore,
+confidence: 0.95,
+vectorSpace: null,
+createdAt: trace.timestamp,
+updatedAt: trace.timestamp
+});
+} catch (error) {
+Logger.error(DecisionTimelineTracker: Failed to persist decision node ${trace.id}, error);
+}
+}
+public getTracesInWindow(startTime: number, endTime: number): DecisionTrace[] {
+return Array.from(this.activeTraces.values())
+.filter(t => t.timestamp >= startTime && t.timestamp <= endTime)
+.sort((a, b) => b.timestamp - a.timestamp);
+}
+}
+export default new DecisionTimelineTracker();
+=== END_FILE ===
+STAGE 9 — INSIGHTS ENGINE (Completing Weekly & Monthly Aggregation Manifests)
+=== START_FILE: src/services/insights/PeriodicInsightAggregator.ts ===
+import InsightsEngine from './InsightsEngine';
+import MemoryRepository from '../memory/MemoryRepository';
+import Logger from '../../utils/Logger';
+export interface ManifestReport {
+periodLabel: 'WEEKLY' | 'MONTHLY';
+generatedAt: number;
+aggregateFrictionRatio: number;
+stabilityIndex: number;
+insightCount: number;
+}
+export class PeriodicInsightAggregator {
+/**
+Compiles and materializes unified analytical cards for high-level user reflection profiles.
+*/
+public compilePeriodicManifest(type: 'WEEKLY' | 'MONTHLY'): ManifestReport {
+Logger.info(PeriodicInsightAggregator: Executing ${type} intelligence consolidation loop.);
+const dashboardSnapshot = InsightsEngine.generateIntelligenceDashboard();
+const targetCards = dashboardSnapshot.activeInsightCards;
+const generatedAt = Date.now();
+if (targetCards.length === 0) {
+Logger.info('PeriodicInsightAggregator: Empty anomaly profile vector. Synchronization pass skipped.');
+return { periodLabel: type, generatedAt, aggregateFrictionRatio: dashboardSnapshot.cognitiveFrictionRatio, stabilityIndex: dashboardSnapshot.habitStabilityIndex, insightCount: 0 };
+}
+try {
+const structuralSummaryText = [INTELLIGENCE MANIFEST - ${type}] Stability Index: ${dashboardSnapshot.habitStabilityIndex}, Friction Ratio: ${dashboardSnapshot.cognitiveFrictionRatio}. Active Insight Dimensions: ${targetCards.length};
+const uniqueManifestId = man_${type.toLowerCase()}_${generatedAt};
+MemoryRepository.commitNode({
+id: uniqueManifestId,
+bitmask: 1 << 5, // Reflection Bitmask
+content: structuralSummaryText,
+importance: type === 'MONTHLY' ? 9 : 7,
+confidence: 0.98,
+vectorSpace: null,
+createdAt: generatedAt,
+updatedAt: generatedAt
+});
+// Link newly compiled periodic baseline cards directly down to individual insight nodes
+for (const card of targetCards) {
+MemoryRepository.linkMemories(uniqueManifestId, card.id, 'AGGREGATES_INSIGHT');
+}
+Logger.info(PeriodicInsightAggregator: Hardened ${type} summary log committed: ${uniqueManifestId});
+} catch (error) {
+Logger.error(PeriodicInsightAggregator: Error encountered finalizing periodic manifest compile sequence., error);
+}
+return {
+periodLabel: type,
+generatedAt,
+aggregateFrictionRatio: dashboardSnapshot.cognitiveFrictionRatio,
+stabilityIndex: dashboardSnapshot.habitStabilityIndex,
+insightCount: targetCards.length
+};
+}
+}
+export default new PeriodicInsightAggregator();
+=== END_FILE ===
+STAGE 10 — PRODUCTION SYSTEMS (Completing Performance Monitoring & Cache Eviction Controls)
+=== START_FILE: src/services/production/PerformanceMonitor.ts ===
+import Logger from '../../utils/Logger';
+export interface ResourceTelemetrySnapshot {
+timestamp: number;
+cpuLoadEstimate: number;
+ramFootprintBytes: number;
+batteryDrainState: 'nominal' | 'critical';
+}
+export class PerformanceMonitor {
+private telemetryHistory: ResourceTelemetrySnapshot[] = [];
+private readonly maxHistoryCapacity = 500;
+/**
+Registers a point-in-time performance metrics tracking node to monitor platform execution boundaries.
+*/
+public trackAllocationState(cpuLoad: number, ramBytes: number, voltageDrainLow: boolean): ResourceTelemetrySnapshot {
+const snapshot: ResourceTelemetrySnapshot = {
+timestamp: Date.now(),
+cpuLoadEstimate: Math.min(1.0, Math.max(0.0, cpuLoad)),
+ramFootprintBytes: Math.max(0, ramBytes),
+batteryDrainState: voltageDrainLow ? 'critical' : 'nominal'
+};
+this.telemetryHistory.push(snapshot);
+if (this.telemetryHistory.length > this.maxHistoryCapacity) {
+this.telemetryHistory.shift(); // Evict oldest record index to bound memory footprint sizes
+}
+if (snapshot.cpuLoadEstimate > 0.85 || snapshot.batteryDrainState === 'critical') {
+Logger.warn(PerformanceMonitor: High resource stress envelope observed. CPU: ${snapshot.cpuLoadEstimate}, Power: ${snapshot.batteryDrainState});
+}
+return snapshot;
+}
+public getAverageCpuUtilization(): number {
+if (this.telemetryHistory.length === 0) return 0.0;
+const sum = this.telemetryHistory.reduce((acc, curr) => acc + curr.cpuLoadEstimate, 0);
+return Number((sum / this.telemetryHistory.length).toFixed(3));
+}
+public clearTelemetryCache(): void {
+this.telemetryHistory = [];
+Logger.debug('PerformanceMonitor: Telemetry log buffer arrays cleared.');
+}
+}
+export default new PerformanceMonitor();
+=== END_FILE ===
+
+STAGE 10 — PRODUCTION SYSTEMS (Backup, Restore, & Migration Engines)
+=== START_FILE: src/services/production/BackupProtector.ts ===
+import RNFS from 'react-native-fs';
+import { CryptoEngine } from '../security/CryptoEngine';
+import KeyManager from '../security/KeyManager';
+import Logger from '../../utils/Logger';
+export interface BackupPackageManifest {
+archiveId: string;
+timestamp: number;
+encryptedDataBlob: string;
+verificationHash: string;
+}
+export class BackupProtector {
+private readonly backupDirectory = ${RNFS.DocumentDirectoryPath}/Evolva/backups;
+/**
+Compiles and encrypts target JSON files to establish a secure, portable system snapshot state.
+*/
+public async createSystemBackupArchive(sourceJsonPath: string): Promise<BackupPackageManifest | null> {
+Logger.info(BackupProtector: Commencing encrypted system state snapshot export loop from source: ${sourceJsonPath});
+try {
+const fileExists = await RNFS.exists(sourceJsonPath);
+if (!fileExists) {
+throw new Error(Backup source target path "${sourceJsonPath}" is unhydrated.);
+}
+// 1. Ensure target backup path directories are established
+const dirExists = await RNFS.exists(this.backupDirectory);
+if (!dirExists) {
+await RNFS.mkdir(this.backupDirectory);
+}
+// 2. Read the source plain payload manifest file
+const rawTextData = await RNFS.readFile(sourceJsonPath, 'utf8');
+const textBytes = new TextEncoder().encode(rawTextData);
+// 3. Resolve context isolated backup key material via KeyManager routing
+const subKeyData = await KeyManager.getActiveSubKey('backup_enclave_export');
+// 4. Transform bytes utilizing authenticated GCM primitive wrappers
+const encryptedPack = await CryptoEngine.encryptAuthenticated(
+textBytes,
+subKeyData.keyMaterial,
+Evolva_Backup_Signature_v${subKeyData.meta.version}
+);
+const serializedBackupString = JSON.stringify(encryptedPack);
+const outputHashBytes = await CryptoEngine.computeSHA256(new TextEncoder().encode(serializedBackupString));
+const fileVerificationHash = Array.from(outputHashBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+const archiveId = bak_${Date.now()};
+const destinationFileTarget = ${this.backupDirectory}/${archiveId}.enc;
+// 5. Commit fully encrypted sequence payload block onto disk partitions
+await RNFS.writeFile(destinationFileTarget, serializedBackupString, 'utf8');
+Logger.info(BackupProtector: System backup file successfully materialized: ${destinationFileTarget});
+return {
+archiveId,
+timestamp: Date.now(),
+encryptedDataBlob: serializedBackupString,
+verificationHash: fileVerificationHash
+};
+} catch (error) {
+Logger.error('BackupProtector: Critical error encountered while producing system backup envelope.', error);
+return null;
+}
+}
+}
+export default new BackupProtector();
+=== END_FILE ===
+
+=== START_FILE: src/services/production/RecoveryManager.ts ===
+import RNFS from 'react-native-fs';
+import { CryptoEngine, AuthenticatedPackage } from '../security/CryptoEngine';
+import KeyManager from '../security/KeyManager';
+import Logger from '../../utils/Logger';
+export class RecoveryManager {
+/**
+Decrypts, validates, and restores an external backup archive straight back into production storage layout vectors.
+*/
+public async restoreSystemFromArchive(archivePath: string, destinationDbPath: string): Promise<boolean> {
+Logger.info(RecoveryManager: Executing disaster recovery reconstruction loop for snapshot source: ${archivePath});
+try {
+const archiveExists = await RNFS.exists(archivePath);
+if (!archiveExists) {
+throw new Error(Recovery processing failed. Input target package missing at path: ${archivePath});
+}
+// 1. Extract serialized target structural package contents
+const rawFileString = await RNFS.readFile(archivePath, 'utf8');
+const encryptedPackage: AuthenticatedPackage = JSON.parse(rawFileString);
+// 2. Resolve target decryption tracking subkey reference materials
+const subKeyData = await KeyManager.getActiveSubKey('backup_enclave_export');
+// 3. Authenticate block boundaries and decode payload directly back to plain byte strings
+const decryptedBytes = await CryptoEngine.decryptAuthenticated(encryptedPackage, subKeyData.keyMaterial);
+const plaintextDatabaseString = new TextDecoder().decode(decryptedBytes);
+// Verify structure formatting matches parsing schemas perfectly before overriding disk records
+JSON.parse(plaintextDatabaseString);
+// 4. Safe destination block rewrite loop
+const targetDir = destinationDbPath.substring(0, destinationDbPath.lastIndexOf('/'));
+const dirExists = await RNFS.exists(targetDir);
+if (!dirExists) {
+await RNFS.mkdir(targetDir);
+}
+await RNFS.writeFile(destinationDbPath, plaintextDatabaseString, 'utf8');
+Logger.info(RecoveryManager: Enclave database records successfully reconstructed: ${destinationDbPath});
+return true;
+} catch (error) {
+Logger.error(RecoveryManager: Disaster recovery cycle aborted. Cryptographic signature failed or payload data is corrupt., error);
+return false;
+}
+}
+}
+export default new RecoveryManager();
+=== END_FILE ===
+=== START_FILE: src/services/production/MigrationEngine.ts ===
+import Logger from '../../utils/Logger';
+export interface MigrationStepBlock {
+targetVersion: number;
+executeSchemaPatch(dbConnection: any): Promise<void>;
+}
+export class MigrationEngine {
+private currentSchemaVersion = 1;
+private readonly targetSystemVersion = 3;
+private migrationRegistry: Map<number, MigrationStepBlock> = new Map();
+constructor() {
+this.registerMigrationSequenceSteps();
+}
+/**
+Registers sequential data restructuring steps to ensure clean application structural upgrades.
+*/
+private registerMigrationSequenceSteps(): void {
+// Migration Path definition: Upgrading database schemas from version 1 to 2
+this.migrationRegistry.set(2, {
+targetVersion: 2,
+executeSchemaPatch: async (db) => {
+db.execute('ALTER TABLE memory_nodes ADD COLUMN global_sync_marker TEXT;');
+}
+});
+// Migration Path definition: Upgrading database schemas from version 2 to 3
+this.migrationRegistry.set(3, {
+targetVersion: 3,
+executeSchemaPatch: async (db) => {
+db.execute('CREATE TABLE IF NOT EXISTS system_metadata_cache (meta_key TEXT PRIMARY KEY, meta_val TEXT);');
+}
+});
+}
+/**
+Runs schema upgrades sequentially until the database reaches the target production version.
+*/
+public async executeStructuralMigrations(databaseInstance: any, activeDbVersion: number): Promise<boolean> {
+this.currentSchemaVersion = activeDbVersion;
+if (this.currentSchemaVersion >= this.targetSystemVersion) {
+Logger.info(MigrationEngine: Storage schema structures comply with latest version constraints: v${this.currentSchemaVersion});
+return true;
+}
+Logger.warn(MigrationEngine: Outdated storage layout verified (v${this.currentSchemaVersion}). Initializing structural upgrade pass.);
+try {
+while (this.currentSchemaVersion < this.targetSystemVersion) {
+const nextVersionIndex = this.currentSchemaVersion + 1;
+const upgradePatch = this.migrationRegistry.get(nextVersionIndex);
+if (!upgradePatch) {
+throw new Error(Migration pipeline break: Upgrade step patch script missing for target version version marker: v${nextVersionIndex});
+}
+Logger.info(MigrationEngine: Applying transformation patch straight to version schema baseline: v${nextVersionIndex});
+await upgradePatch.executeSchemaPatch(databaseInstance);
+this.currentSchemaVersion = nextVersionIndex;
+}
+Logger.info(MigrationEngine: Successfully upgraded data partitions to standard production specs: v${this.currentSchemaVersion});
+return true;
+} catch (migrationFault) {
+Logger.error('MigrationEngine: Cascade migration pass aborted due to a critical structure patch script failure.', migrationFault);
+return false;
+}
+}
+}
+export default new MigrationEngine();
+=== END_FILE ===
+
+
+
+

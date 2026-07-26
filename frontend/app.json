@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "Evolva",
+    "slug": "evolva",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "android": {
+      "predictiveBackGestureEnabled": false,
+      "package": "com.adirwt.evolva"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.adirwt.evolva"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "80e4c42a-a470-4e2d-b1ae-1196f5f68d60"
+      }
+    }
+  }
+}

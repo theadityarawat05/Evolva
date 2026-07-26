@@ -1,0 +1,23 @@
+{
+  "devDependencies": {
+    "@react-native-community/cli": "^20.2.0",
+    "@react-native-community/cli-plugin-metro": "^12.3.6",
+    "@react-native/metro-config": "^0.86.0",
+    "@types/react": "^19.2.17",
+    "@types/react-native": "^0.72.8",
+    "metro-config": "^0.87.0",
+    "typescript": "^7.0.2"
+  },
+  "scripts": {
+    "start": "npx react-native start",
+    "android": "npx react-native run-android"
+  },
+  "dependencies": {
+    "events": "^3.3.0",
+    "llama.rn": "^0.12.7",
+    "react": "^19.2.8",
+    "react-native": "^0.86.0",
+    "react-native-fs": "^2.20.0",
+    "zustand": "^5.0.14"
+  }
+}

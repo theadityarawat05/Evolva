@@ -1,0 +1,1645 @@
+=== START_FILE: src/services/ai/types.ts ===
+
+export type AIProviderType = "local" | "remote";
+
+export type MessageRole =
+  | "system"
+  | "user"
+  | "assistant";
+
+export interface ChatMessage {
+  id: string;
+  role: MessageRole;
+  content: string;
+  createdAt: number;
+}
+
+export interface GenerationOptions {
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+  maxTokens?: number;
+  stop?: string[];
+  stream?: boolean;
+}
+
+export interface TokenUsage {
+  prompt: number;
+  completion: number;
+  total: number;
+}
+
+export interface AIResponse {
+  id: string;
+  text: string;
+  usage?: TokenUsage;
+  finishReason: "stop" | "length" | "cancelled" | "error";
+}
+
+export interface AIHealth {
+  ready: boolean;
+  model: string;
+  contextSize: number;
+}
+
+export interface AIProvider {
+  readonly type: AIProviderType;
+
+  initialize(): Promise<void>;
+
+  generate(
+    messages: ChatMessage[],
+    options?: GenerationOptions,
+  ): Promise<AIResponse>;
+
+  health(): Promise<AIHealth>;
+
+  dispose(): Promise<void>;
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/config/ai.ts ===
+
+export const AI_CONFIG = Object.freeze({
+  MODEL_PATH:
+    "/storage/emulated/0/Evolva/models/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+
+  MODEL_NAME: "Qwen2.5-1.5B-Instruct",
+
+  CONTEXT_SIZE: 4096,
+
+  THREADS: 4,
+
+  GPU_LAYERS: 99,
+
+  TEMPERATURE: 0.7,
+
+  TOP_P: 0.95,
+
+  TOP_K: 40,
+
+  MAX_TOKENS: 512,
+
+  STOP: ["</s>"],
+
+  USE_MMAP: true,
+
+  USE_MLOCK: false,
+} as const);
+
+export type AIConfig = typeof AI_CONFIG;
+
+=== END_FILE ===
+
+=== START_FILE: src/config/runtime.ts ===
+
+export const RUNTIME_CONFIG = Object.freeze({
+  AUTO_INITIALIZE: true,
+
+  ENABLE_STREAMING: true,
+
+  ENABLE_LOGGING: true,
+
+  ENABLE_MEMORY: false,
+
+  ENABLE_REASONING: true,
+
+  MAX_CONVERSATION_MESSAGES: 20,
+
+  MAX_RETRY_COUNT: 2,
+
+  INITIALIZATION_TIMEOUT_MS: 30000,
+} as const);
+
+export type RuntimeConfig = typeof RUNTIME_CONFIG;
+
+=== END_FILE ===
+
+=== START_FILE: src/utils/Logger.ts ===
+
+export enum LogLevel {
+  DEBUG = "DEBUG",
+  INFO = "INFO",
+  WARN = "WARN",
+  ERROR = "ERROR",
+}
+
+class Logger {
+
+  private enabled = true;
+
+  setEnabled(enabled: boolean) {
+    this.enabled = enabled;
+  }
+
+  private print(
+    level: LogLevel,
+    message: string,
+    data?: unknown,
+  ) {
+    if (!this.enabled) return;
+
+    const time = new Date().toISOString();
+
+    if (data !== undefined) {
+      console.log(
+        `[${time}] [${level}] ${message}`,
+        data,
+      );
+      return;
+    }
+
+    console.log(
+      `[${time}] [${level}] ${message}`,
+    );
+  }
+
+  debug(
+    message: string,
+    data?: unknown,
+  ) {
+    this.print(
+      LogLevel.DEBUG,
+      message,
+      data,
+    );
+  }
+
+  info(
+    message: string,
+    data?: unknown,
+  ) {
+    this.print(
+      LogLevel.INFO,
+      message,
+      data,
+    );
+  }
+
+  warn(
+    message: string,
+    data?: unknown,
+  ) {
+    this.print(
+      LogLevel.WARN,
+      message,
+      data,
+    );
+  }
+
+  error(
+    message: string,
+    data?: unknown,
+  ) {
+    this.print(
+      LogLevel.ERROR,
+      message,
+      data,
+    );
+  }
+}
+
+export default new Logger();
+
+=== END_FILE ===
+
+=== START_FILE: src/utils/Errors.ts ===
+
+export class AIError extends Error {
+
+  constructor(
+    message: string,
+  ) {
+    super(message);
+
+    this.name = "AIError";
+  }
+
+}
+
+export class RuntimeError extends AIError {
+
+  constructor(
+    message: string,
+  ) {
+    super(message);
+
+    this.name = "RuntimeError";
+  }
+
+}
+
+export class ModelLoadError extends AIError {
+
+  constructor(
+    message: string,
+  ) {
+    super(message);
+
+    this.name = "ModelLoadError";
+  }
+
+}
+
+export class GenerationError extends AIError {
+
+  constructor(
+    message: string,
+  ) {
+    super(message);
+
+    this.name = "GenerationError";
+  }
+
+}
+
+export class InitializationError extends AIError {
+
+  constructor(
+    message: string,
+  ) {
+    super(message);
+
+    this.name = "InitializationError";
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/utils/TokenCounter.ts ===
+
+import { TokenUsage } from "../services/ai/types";
+
+export default class TokenCounter {
+
+  static estimateTokens(
+    text: string,
+  ): number {
+
+    if (!text.trim()) {
+      return 0;
+    }
+
+    return Math.ceil(
+      text.length / 4,
+    );
+
+  }
+
+  static buildUsage(
+    prompt: string,
+    completion: string,
+  ): TokenUsage {
+
+    const promptTokens =
+      this.estimateTokens(prompt);
+
+    const completionTokens =
+      this.estimateTokens(completion);
+
+    return {
+
+      prompt: promptTokens,
+
+      completion: completionTokens,
+
+      total:
+        promptTokens +
+        completionTokens,
+
+    };
+
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/utils/ContextWindow.ts ===
+
+import {
+  ChatMessage,
+} from "../services/ai/types";
+
+export default class ContextWindow {
+
+  static trim(
+    messages: ChatMessage[],
+    maxMessages: number,
+  ): ChatMessage[] {
+
+    if (
+      messages.length <=
+      maxMessages
+    ) {
+      return messages;
+    }
+
+    return messages.slice(
+      messages.length -
+        maxMessages,
+    );
+
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/SystemPrompt.ts ===
+
+export const SYSTEM_PROMPT = `
+You are Evolva.
+
+You are not a generic chatbot.
+
+Your purpose is to help the user think, learn, remember, build, and grow.
+
+Rules:
+
+- Never invent memories.
+- Never claim experiences you do not have.
+- Be concise unless deeper reasoning is requested.
+- Prioritize accuracy over confidence.
+- Maintain conversation continuity.
+- If memory is unavailable, continue naturally without pretending to remember.
+- Be calm, professional and analytical.
+- Think step-by-step before answering difficult questions.
+`;
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/PromptTemplates.ts ===
+
+import { ChatMessage } from "./types";
+import { SYSTEM_PROMPT } from "./SystemPrompt";
+
+export default class PromptTemplates {
+
+  static build(
+    history: ChatMessage[],
+    userMessage: string,
+  ): ChatMessage[] {
+
+    return [
+
+      {
+        id: "system",
+        role: "system",
+        content: SYSTEM_PROMPT,
+        createdAt: Date.now(),
+      },
+
+      ...history,
+
+      {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: userMessage,
+        createdAt: Date.now(),
+      },
+
+    ];
+
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/PromptBuilder.ts ===
+
+import {
+  ChatMessage,
+} from "./types";
+
+import PromptTemplates
+from "./PromptTemplates";
+
+export default class PromptBuilder {
+
+  static buildPrompt(
+    history: ChatMessage[],
+    message: string,
+  ): ChatMessage[] {
+
+    return PromptTemplates.build(
+      history,
+      message,
+    );
+
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/AIProvider.ts ===
+
+import {
+  AIHealth,
+  AIProvider,
+  AIResponse,
+  ChatMessage,
+  GenerationOptions,
+} from "./types";
+
+export abstract class BaseAIProvider
+implements AIProvider {
+
+  abstract readonly type:
+    "local" | "remote";
+
+  abstract initialize():
+    Promise<void>;
+
+  abstract generate(
+    messages: ChatMessage[],
+    options?: GenerationOptions,
+  ): Promise<AIResponse>;
+
+  abstract health():
+    Promise<AIHealth>;
+
+  abstract dispose():
+    Promise<void>;
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/ModelRegistry.ts ===
+
+export interface RegisteredModel {
+
+  id: string;
+
+  name: string;
+
+  path: string;
+
+  contextSize: number;
+
+  gpuLayers: number;
+
+  enabled: boolean;
+
+}
+
+export default class ModelRegistry {
+
+  private static readonly models:
+    RegisteredModel[] = [
+
+    {
+      id: "qwen2.5-1.5b",
+
+      name: "Qwen2.5-1.5B-Instruct",
+
+      path:
+        "/storage/emulated/0/Evolva/models/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+
+      contextSize: 4096,
+
+      gpuLayers: 99,
+
+      enabled: true,
+    },
+
+  ];
+
+  static getDefault(): RegisteredModel {
+
+    const model =
+      this.models.find(
+        m => m.enabled,
+      );
+
+    if (!model) {
+      throw new Error(
+        "No active model registered.",
+      );
+    }
+
+    return model;
+
+  }
+
+  static list() {
+
+    return this.models;
+
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/ModelValidator.ts ===
+
+import RNFS from "react-native-fs";
+
+import {
+  RegisteredModel,
+} from "./ModelRegistry";
+
+export default class ModelValidator {
+
+  static async validate(
+    model: RegisteredModel,
+  ) {
+
+    const exists =
+      await RNFS.exists(
+        model.path,
+      );
+
+    if (!exists) {
+
+      throw new Error(
+        `Model not found:\n${model.path}`,
+      );
+
+    }
+
+    return true;
+
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/ModelManager.ts ===
+
+import ModelRegistry
+from "./ModelRegistry";
+
+import ModelValidator
+from "./ModelValidator";
+
+export default class ModelManager {
+
+  private initialized =
+    false;
+
+  async initialize() {
+
+    if (
+      this.initialized
+    ) {
+      return;
+    }
+
+    const model =
+      ModelRegistry
+      .getDefault();
+
+    await ModelValidator
+      .validate(model);
+
+    this.initialized =
+      true;
+
+  }
+
+  getModel() {
+
+    return ModelRegistry
+      .getDefault();
+
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/index.ts ===
+
+export * from "./types";
+
+export {
+  default as PromptBuilder,
+}
+from "./PromptBuilder";
+
+export {
+  BaseAIProvider,
+}
+from "./AIProvider";
+
+export {
+  default as ModelManager,
+}
+from "./ModelManager";
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/RuntimeState.ts ===
+
+export enum RuntimeStatus {
+  IDLE = "IDLE",
+  INITIALIZING = "INITIALIZING",
+  READY = "READY",
+  GENERATING = "GENERATING",
+  ERROR = "ERROR",
+  DISPOSED = "DISPOSED",
+}
+
+export interface RuntimeMetrics {
+  loadTime: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  generationTime: number;
+}
+
+export interface RuntimeState {
+
+  status: RuntimeStatus;
+
+  initialized: boolean;
+
+  modelLoaded: boolean;
+
+  currentModel?: string;
+
+  metrics: RuntimeMetrics;
+
+}
+
+export const DEFAULT_RUNTIME_STATE: RuntimeState = {
+
+  status: RuntimeStatus.IDLE,
+
+  initialized: false,
+
+  modelLoaded: false,
+
+  currentModel: undefined,
+
+  metrics: {
+
+    loadTime: 0,
+
+    promptTokens: 0,
+
+    completionTokens: 0,
+
+    totalTokens: 0,
+
+    generationTime: 0,
+
+  },
+
+};
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/Runtime.ts ===
+
+import {
+  initLlama,
+  type LlamaContext,
+} from "llama.rn";
+
+import {
+  AI_CONFIG,
+} from "../../config/ai";
+
+import Logger
+from "../../utils/Logger";
+
+import ModelManager
+from "./ModelManager";
+
+import {
+  RuntimeStatus,
+} from "./RuntimeState";
+
+export default class Runtime {
+
+  private context:
+    LlamaContext | null = null;
+
+  private status =
+    RuntimeStatus.IDLE;
+
+  private modelManager =
+    new ModelManager();
+
+  async initialize() {
+
+    if (
+      this.context
+    ) {
+
+      return;
+
+    }
+
+    this.status =
+      RuntimeStatus.INITIALIZING;
+
+    await this.modelManager
+      .initialize();
+
+    const model =
+      this.modelManager
+      .getModel();
+
+    Logger.info(
+      "Loading model..."
+    );
+
+    this.context =
+      await initLlama({
+
+        model: model.path,
+
+        n_ctx:
+          AI_CONFIG.CONTEXT_SIZE,
+
+        n_threads:
+          AI_CONFIG.THREADS,
+
+        n_gpu_layers:
+          AI_CONFIG.GPU_LAYERS,
+
+        use_mmap:
+          AI_CONFIG.USE_MMAP,
+
+        use_mlock:
+          AI_CONFIG.USE_MLOCK,
+
+      });
+
+    this.status =
+      RuntimeStatus.READY;
+
+    Logger.info(
+      "Runtime Ready."
+    );
+
+  }
+
+  getContext() {
+
+    if (
+      !this.context
+    ) {
+
+      throw new Error(
+        "Runtime not initialized."
+      );
+
+    }
+
+    return this.context;
+
+  }
+
+  getStatus() {
+
+    return this.status;
+
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/stores/runtimeStore.ts ===
+
+import {
+  create,
+} from "zustand";
+
+import Runtime
+from "../services/ai/Runtime";
+
+interface RuntimeStore {
+
+  runtime:
+    Runtime;
+
+  ready:
+    boolean;
+
+  initialize():
+    Promise<void>;
+
+}
+
+export const useRuntimeStore =
+create<RuntimeStore>(
+(set)=>({
+
+runtime:
+new Runtime(),
+
+ready:false,
+
+async initialize(){
+
+const runtime =
+new Runtime();
+
+await runtime
+.initialize();
+
+set({
+
+runtime,
+
+ready:true,
+
+});
+
+},
+
+}),
+);
+
+=== END_FILE ===
+
+=== START_FILE: src/hooks/useRuntime.ts ===
+
+import {
+  useEffect,
+} from "react";
+
+import {
+  useRuntimeStore,
+} from "../stores/runtimeStore";
+
+export default function
+useRuntime(){
+
+const {
+
+initialize,
+
+ready,
+
+runtime,
+
+} =
+useRuntimeStore();
+
+useEffect(()=>{
+
+initialize();
+
+},[]);
+
+return{
+
+runtime,
+
+ready,
+
+};
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/LocalProvider.ts ===
+
+import {
+  BaseAIProvider,
+} from "./AIProvider";
+
+import {
+  AIHealth,
+  AIResponse,
+  ChatMessage,
+  GenerationOptions,
+} from "./types";
+
+import Runtime
+from "./Runtime";
+
+import TokenCounter
+from "../../utils/TokenCounter";
+
+export default class LocalProvider
+extends BaseAIProvider {
+
+  readonly type = "local" as const;
+
+  private runtime =
+    new Runtime();
+
+  async initialize() {
+
+    await this.runtime
+      .initialize();
+
+  }
+
+  async generate(
+
+    messages:
+      ChatMessage[],
+
+    options?:
+      GenerationOptions,
+
+  ): Promise<AIResponse> {
+
+    const context =
+      this.runtime
+      .getContext();
+
+    const result =
+      await context
+      .completion({
+
+        messages,
+
+        temperature:
+          options?.temperature ??
+          0.7,
+
+        top_p:
+          options?.topP ??
+          0.95,
+
+        top_k:
+          options?.topK ??
+          40,
+
+        n_predict:
+          options?.maxTokens ??
+          512,
+
+        stop:
+          options?.stop ??
+          ["</s>"],
+
+      });
+
+    const last =
+      messages[
+        messages.length-1
+      ];
+
+    return {
+
+      id:
+        Date.now()
+        .toString(),
+
+      text:
+        result.text,
+
+      finishReason:
+        "stop",
+
+      usage:
+        TokenCounter
+        .buildUsage(
+
+          last.content,
+
+          result.text,
+
+        ),
+
+    };
+
+  }
+
+  async health():
+    Promise<AIHealth>{
+
+    return{
+
+      ready:true,
+
+      model:
+      "Qwen2.5",
+
+      contextSize:
+      4096,
+
+    };
+
+  }
+
+  async dispose(){
+
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/AIService.ts ===
+
+import LocalProvider
+from "./LocalProvider";
+
+import PromptBuilder
+from "./PromptBuilder";
+
+import {
+  AIResponse,
+  ChatMessage,
+} from "./types";
+
+export default class AIService {
+
+  private provider =
+    new LocalProvider();
+
+  async initialize(){
+
+    await this.provider
+      .initialize();
+
+  }
+
+  async ask(
+
+    history:
+      ChatMessage[],
+
+    message:
+      string,
+
+  ):Promise<AIResponse>{
+
+    const prompt =
+
+      PromptBuilder
+      .buildPrompt(
+
+        history,
+
+        message,
+
+      );
+
+    return this.provider
+      .generate(
+        prompt,
+      );
+
+  }
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/stores/chatStore.ts ===
+
+import {
+  create,
+} from "zustand";
+
+import {
+  ChatMessage,
+} from "../services/ai";
+
+interface ChatStore{
+
+messages:
+ChatMessage[];
+
+add(
+message:
+ChatMessage,
+):void;
+
+clear():
+void;
+
+}
+
+export const
+useChatStore=
+create<ChatStore>(
+(set)=>({
+
+messages:[],
+
+add(message){
+
+set(state=>({
+
+messages:[
+
+...state.messages,
+
+message,
+
+],
+
+}));
+
+},
+
+clear(){
+
+set({
+
+messages:[],
+
+});
+
+},
+
+}),
+);
+
+=== END_FILE ===
+
+=== START_FILE: src/hooks/useChat.ts ===
+
+import {
+  useState,
+} from "react";
+
+import AIService
+from "../services/ai/AIService";
+
+import {
+  useChatStore,
+} from "../stores/chatStore";
+
+export default function
+useChat(){
+
+const{
+
+messages,
+
+add,
+
+}=
+useChatStore();
+
+const
+[loading,
+setLoading]=
+useState(false);
+
+const
+service=
+new AIService();
+
+async function
+send(
+text:string,
+){
+
+setLoading(true);
+
+const user={
+
+id:
+Date.now()
+.toString(),
+
+role:"user",
+
+content:text,
+
+createdAt:
+Date.now(),
+
+};
+
+add(user);
+
+const response=
+
+await service.ask(
+
+messages,
+
+text,
+
+);
+
+add({
+
+id:
+response.id,
+
+role:
+"assistant",
+
+content:
+response.text,
+
+createdAt:
+Date.now(),
+
+});
+
+setLoading(false);
+
+}
+
+return{
+
+messages,
+
+loading,
+
+send,
+
+};
+
+}
+
+=== END_FILE ===
+
+
+=== START_FILE: src/screens/chat/ChatScreen.tsx ===
+
+import React, {
+  useEffect,
+} from "react";
+
+import {
+  View,
+  FlatList,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ActivityIndicator,
+} from "react-native";
+
+import useChat
+from "../../hooks/useChat";
+
+import {
+  AI_CONFIG,
+} from "../../config/ai";
+
+export default function ChatScreen(){
+
+const{
+
+messages,
+
+loading,
+
+send,
+
+}=useChat();
+
+const
+[input,
+setInput]=
+React.useState("");
+
+async function
+handleSend(){
+
+if(
+!input.trim()
+)return;
+
+const text=input;
+
+setInput("");
+
+await send(text);
+
+}
+
+return(
+
+<View style={styles.container}>
+
+<FlatList
+
+data={messages}
+
+keyExtractor={
+(item)=>item.id
+}
+
+contentContainerStyle={
+styles.list
+}
+
+renderItem={({
+item,
+})=>(
+
+<View
+style={[
+styles.bubble,
+
+item.role===
+"user"
+
+?
+
+styles.user
+
+:
+
+styles.ai,
+
+]}>
+
+<Text
+style={
+styles.text
+}>
+
+{item.content}
+
+</Text>
+
+</View>
+
+)}
+
+/>
+
+{
+
+loading&&(
+
+<View
+style={
+styles.loading
+}>
+
+<ActivityIndicator/>
+
+<Text>
+
+Thinking...
+
+</Text>
+
+</View>
+
+)
+
+}
+
+<View
+style={
+styles.bottom
+}>
+
+<TextInput
+
+value={input}
+
+onChangeText={
+setInput
+}
+
+placeholder=
+"Message Evolva"
+
+style={
+styles.input
+}
+
+/>
+
+<TouchableOpacity
+
+style={
+styles.button
+}
+
+onPress={
+handleSend
+}
+
+>
+
+<Text
+style={
+styles.buttonText
+}>
+
+Send
+
+</Text>
+
+</TouchableOpacity>
+
+</View>
+
+</View>
+
+);
+
+}
+
+const styles=
+StyleSheet.create({
+
+container:{
+
+flex:1,
+
+backgroundColor:
+"#0F1115",
+
+},
+
+list:{
+
+padding:16,
+
+},
+
+bubble:{
+
+padding:14,
+
+borderRadius:18,
+
+marginBottom:10,
+
+maxWidth:"85%",
+
+},
+
+user:{
+
+alignSelf:"flex-end",
+
+backgroundColor:"#4F46E5",
+
+},
+
+ai:{
+
+alignSelf:"flex-start",
+
+backgroundColor:"#22252B",
+
+},
+
+text:{
+
+color:"#FFFFFF",
+
+fontSize:16,
+
+},
+
+loading:{
+
+flexDirection:"row",
+
+alignItems:"center",
+
+paddingHorizontal:20,
+
+gap:10,
+
+},
+
+bottom:{
+
+flexDirection:"row",
+
+padding:16,
+
+borderTopWidth:1,
+
+borderTopColor:"#2A2A2A",
+
+},
+
+input:{
+
+flex:1,
+
+backgroundColor:"#20242A",
+
+borderRadius:14,
+
+paddingHorizontal:14,
+
+color:"#FFF",
+
+},
+
+button:{
+
+marginLeft:10,
+
+paddingHorizontal:18,
+
+justifyContent:"center",
+
+borderRadius:14,
+
+backgroundColor:"#4F46E5",
+
+},
+
+buttonText:{
+
+color:"#FFF",
+
+fontWeight:"700",
+
+},
+
+});
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/bootstrap.ts ===
+
+import AIService
+from "./AIService";
+
+class Bootstrap{
+
+private service=
+new AIService();
+
+async start(){
+
+await this.service
+.initialize();
+
+}
+
+}
+
+export default
+new Bootstrap();
+
+=== END_FILE ===
+
+=== START_FILE: src/AppBootstrap.ts ===
+
+import Bootstrap
+from "./services/ai/bootstrap";
+
+export async function
+initializeApp(){
+
+await Bootstrap
+.start();
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/HealthCheck.ts ===
+
+import AIService
+from "./AIService";
+
+export default
+class HealthCheck{
+
+static async run(){
+
+const ai=
+new AIService();
+
+await ai
+.initialize();
+
+return true;
+
+}
+
+}
+
+=== END_FILE ===
+
+=== START_FILE: src/services/ai/version.ts ===
+
+export const
+AI_RUNTIME_VERSION=
+"3.0.0";
+
+export const
+MODEL_VERSION=
+"Qwen2.5-1.5B";
+
+export const
+BOOTSTRAP_VERSION=
+"V3-Part1";
+
+=== END_FILE ===
+
+
