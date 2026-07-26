@@ -30,25 +30,17 @@ jobs:
           cmdline-tools-version: 9477386
           packages: 'platforms;android-33 build-tools;33.0.0 ndk;25.1.8937393 cmake;3.22.1'
 
-      - name: Install Dependencies
+      - name: Install Frontend Dependencies
+        working-directory: frontend
+        run: npm install --legacy-peer-deps || npm install --force
+
+      - name: Configure Local Properties
         run: |
-          npm install --legacy-peer-deps || npm install --force
-          if [ -d "frontend" ]; then
-            cd frontend && npm install --legacy-peer-deps || npm install --force
-          fi
+          echo "sdk.dir=$ANDROID_HOME" > frontend/android/local.properties
 
       - name: Build Android Debug APK
+        working-directory: frontend/android
         run: |
-          if [ -f "frontend/android/gradlew" ]; then
-            cd frontend/android
-          elif [ -f "android/gradlew" ]; then
-            cd android
-          else
-            echo "Searching for app gradlew (excluding node_modules)..."
-            APP_GRADLE=$(find . -not -path "*/node_modules/*" -name "gradlew" -print -quit)
-            cd $(dirname "$APP_GRADLE")
-          fi
-          echo "Building in directory: $(pwd)"
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace -Dorg.gradle.jvmargs="-Xmx4096m"
 
